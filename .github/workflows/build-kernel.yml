@@ -65,11 +65,14 @@ jobs:
         if: ${{ inputs.kernelsu_next }}
         run: |
           grep -q 'int do_execve(' fs/exec.c
+          grep -q 'int do_execveat(' fs/exec.c
+          grep -q 'static int compat_do_execve(' fs/exec.c
+          grep -q 'static int compat_do_execveat(' fs/exec.c
           grep -q 'SYSCALL_DEFINE3(faccessat' fs/open.c
           grep -q 'ssize_t vfs_read(' fs/read_write.c
           grep -q 'SYSCALL_DEFINE4(newfstatat' fs/stat.c
-          grep -q 'SYSCALL_DEFINE3(setresuid' kernel/sys.c
-          echo 'Manual-hook source anchors found; compile.sh will apply and verify the integration patches.'
+          grep -q 'COMPAT_SYSCALL_DEFINE4(newfstatat' fs/stat.c
+          echo 'Manual-hook source anchors found; compile.sh will apply and verify the current KernelSU-Next API hooks.'
 
       - name: Build and package AnyKernel3 ZIP
         env:
