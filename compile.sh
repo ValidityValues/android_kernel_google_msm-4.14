@@ -19,6 +19,7 @@ CLANG_ARCHIVE="$TOOLCHAIN_DIR/downloads/$CLANG_REV.tar.gz"
 AK3_SOURCE="$TOOLCHAIN_DIR/AnyKernel3"
 KSU_REPO_URL=https://github.com/KernelSU-Next/KernelSU-Next.git
 KSU_BRANCH=legacy
+KSU_COMMIT=b933b1f728116a456fbebf27b6a8772a640cdf23
 
 if [ -z "$KERNEL_NAME" ]; then KERNEL_NAME='Validity Pixel 4 Kernel'; fi
 if [ -z "$LTO_MODE" ]; then LTO_MODE=thin; fi
@@ -93,6 +94,11 @@ if [ "$KSU_ENABLED" -eq 1 ]; then
   else
     [ ! -e "$KSU_DIR" ] || mv "$KSU_DIR" "$KSU_DIR.incomplete.$(date +%Y%m%d%H%M%S)"
     git clone --depth=1 --branch "$KSU_BRANCH" "$KSU_REPO_URL" "$KSU_DIR" 2>&1 | tee -a "$LOG"
+  fi
+  KSU_ACTUAL_COMMIT="$(git -C "$KSU_DIR" rev-parse HEAD)"
+  if [ "$KSU_ACTUAL_COMMIT" != "$KSU_COMMIT" ]; then
+    echo "[ERROR] KernelSU-Next legacy revision changed; expected $KSU_COMMIT, got $KSU_ACTUAL_COMMIT. Re-audit the API before changing KSU_COMMIT." >&2
+    exit 1
   fi
   run_logged git -C "$KSU_DIR" submodule update --init --recursive
   [ -f "$KSU_DIR/kernel/Kconfig" ]
