@@ -276,6 +276,7 @@ if "KSU-NEXT manual hook: vfs_read" not in s:
 extern bool ksu_vfs_read_hook;
 extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
                                size_t *count_ptr, loff_t **pos);
+/* KSU-NEXT manual hook: vfs_read */
 if (unlikely(ksu_vfs_read_hook))
 \tksu_handle_vfs_read(&file, &buf, &count, &pos);
 #endif
