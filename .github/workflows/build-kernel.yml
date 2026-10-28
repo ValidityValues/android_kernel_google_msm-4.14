@@ -64,6 +64,12 @@ jobs:
       - name: Validate manual-hook prerequisites
         if: ${{ inputs.kernelsu_next }}
         run: |
+          bash -n compile.sh
+          patcher="$(mktemp)"
+          sed -n "/^  python3 - .*<<'PY_MANUAL'$/,/^PY_MANUAL$/p" compile.sh | sed '1d;$d' > "$patcher"
+          test -s "$patcher"
+          python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$patcher"
+          rm -f "$patcher"
           grep -q 'int do_execve(' fs/exec.c
           grep -q 'int do_execveat(' fs/exec.c
           grep -q 'static int compat_do_execve(' fs/exec.c
