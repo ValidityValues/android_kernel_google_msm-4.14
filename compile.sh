@@ -327,7 +327,7 @@ if marker not in s:
     if pos < 0:
         raise SystemExit("Manual KSU hook: newfstatat post-declaration anchor not found")
     hook = "\t" + marker + "\n#ifdef CONFIG_KSU\n\tksu_handle_stat(&dfd, &filename, &flag);\n#endif\n\n"
-    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + target.length:]
+    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + len(target):]
 needle = ("COMPAT_SYSCALL_DEFINE4(newfstatat, unsigned int, dfd,\n"
           "\t\t       const char __user *, filename,\n"
           "\t\t       struct compat_stat __user *, statbuf, int, flag)\n{\n")
@@ -341,7 +341,7 @@ if marker not in s:
     if pos < 0:
         raise SystemExit("Manual KSU hook: compat newfstatat post-declaration anchor not found")
     hook = "\t" + marker + "\n#ifdef CONFIG_KSU\n\tksu_handle_stat((int *)&dfd, &filename, &flag);\n#endif\n\n"
-    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + target.length:]
+    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + len(target):]
 p.write_text(s)
 
 # setresuid is handled by KernelSU-Next's direct non-kprobe LSM task_fix_setuid hook.
