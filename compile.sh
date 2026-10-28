@@ -423,7 +423,7 @@ run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSI
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" olddefconfig
 if [ "$KSU_ENABLED" -eq 1 ]; then
   for sym in $EXPECTED; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig." >&2; exit 1; }; done
-  if grep -qE '^CONFIG_(KPROBES|KRETPROBES|KPROBE_EVENTS|KSU_KPROBES_HOOK)=y$' "$OUT_DIR/.config"; then
+  if grep -qE '^CONFIG_(KPROBES|KRETPROBES|KPROBE_EVENTS|KSU_KPROBES_HOOK|KSU_SYSCALL_TABLE_HOOK)=y$' "$OUT_DIR/.config"; then
     echo '[ERROR] Kprobes-related configuration remained enabled in manual mode.' >&2; exit 1
   fi
 fi
