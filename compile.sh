@@ -34,7 +34,23 @@ SAFE_KERNEL_NAME="$(printf '%s' "$KERNEL_NAME" | sed -E 's/[[:space:]]+/-/g; s/[
 KERNEL_VERSION_TAG="$(printf '%s' "$SAFE_KERNEL_NAME" | cut -c1-20)"
 LOCALVERSION="-$KERNEL_VERSION_TAG"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
-run_logged() { log "+ $*"; "$@" 2>&1 | tee -a "$LOG"; }
+run_logged() {
+  log "+ $*"
+  local -a pipeline_status
+  local rc
+  # Put the pipeline in an if-condition so set -e/ERR cannot hide the
+  # original command status behind tee's successful exit status.
+  if "$@" 2>&1 | tee -a "$LOG"; then
+    pipeline_status=("${PIPESTATUS[@]}")
+    return 0
+  else
+    pipeline_status=("${PIPESTATUS[@]}")
+    rc="${pipeline_status[0]:-1}"
+    if [ "$rc" -eq 0 ]; then rc="${pipeline_status[1]:-1}"; fi
+    log "[ERROR] Command failed (exit $rc): $*"
+    return "$rc"
+  fi
+}
 on_error() { rc=$?; echo "[ERROR] Build stopped (exit $rc); out/ and toolchain cache were not cleaned." >&2; echo "[INFO] Log: $LOG" >&2; [ ! -f "$LOG" ] || tail -n 40 "$LOG" >&2; exit "$rc"; }
 trap on_error ERR
 
