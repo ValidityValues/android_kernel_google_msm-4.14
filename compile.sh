@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pixel 4 (floral) Android 4.14 kernel build + AnyKernel3 package.
-# Options: KERNEL_NAME, KSU_NEXT, KSU_HOOK_MODE=kprobes|manual, LTO_MODE=thin|full|none, JOBS.
+# Options: KERNEL_NAME, KSU_NEXT, KSU_HOOK_MODE=manual, LTO_MODE=thin|full|none, JOBS.
 set -Ee pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 OUT_DIR="$ROOT/out"
@@ -62,7 +62,11 @@ if [ -z "$KSU_NEXT" ]; then
   case "${answer,,}" in y|yes) KSU_NEXT=y ;; *) KSU_NEXT=n ;; esac
 fi
 case "${KSU_NEXT,,}" in y|yes|true|1|on) KSU_ENABLED=1 ;; n|no|false|0|off) KSU_ENABLED=0 ;; *) echo '[ERROR] KSU_NEXT must be true/false or y/n.' >&2; exit 2 ;; esac
-if [ "$KSU_ENABLED" -eq 1 ] && [ -z "$KSU_HOOK_MODE" ]; then echo '[ERROR] Set KSU_HOOK_MODE=kprobes or manual.' >&2; exit 2; fi
+if [ "$KSU_ENABLED" -eq 1 ] && [ -z "$KSU_HOOK_MODE" ]; then KSU_HOOK_MODE=manual; fi
+if [ "$KSU_ENABLED" -eq 1 ] && [ "${KSU_HOOK_MODE,,}" != manual ]; then
+  echo '[ERROR] Only KSU_HOOK_MODE=manual is supported; kprobes are disabled for this device.' >&2
+  exit 2
+fi
 
 # Download the pinned Android Clang release and retain partial downloads for retries.
 if [ ! -x "$CLANG_BIN/clang" ] || [ ! -x "$CLANG_BIN/ld.lld" ] || [ ! -x "$CLANG_BIN/llvm-objcopy" ]; then
@@ -161,19 +165,185 @@ PY_UMOUNT
   fi
 fi
 
+if [ "$KSU_ENABLED" -eq 1 ]; then
+  # Integrate KernelSU-Next through explicit kernel call sites. The current
+  # legacy branch no longer exports the older sys_read/reboot handlers shown
+  # in the documentation, so hook the APIs actually provided by this branch.
+  python3 - "$ROOT" "$KSU_DIR" <<'PY_MANUAL'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+ksu = Path(sys.argv[2])
+
+def read(rel):
+    p = root / rel
+    if not p.is_file():
+        raise SystemExit("Manual KSU hook: missing source file: " + rel)
+    return p, p.read_text()
+
+# execve/execveat, native and compat paths.
+p, s = read("fs/exec.c")
+if "extern int ksu_handle_execveat(" not in s:
+    needle = '#include "internal.h"'
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: fs/exec.c include anchor not found")
+    decl = '''#include "internal.h"
+
+#ifdef CONFIG_KSU
+extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
+                               void *argv, void *envp, int *flags);
+#endif'''
+    s = s.replace(needle, decl, 1)
+
+def patch_exec_function(source, name, uses_syscall_args):
+    pattern = re.compile(r"(?ms)^(?:static\s+)?int\s+" + re.escape(name) + r"\b[^{]*\n\{.*?^}")
+    m = pattern.search(source)
+    if not m:
+        raise SystemExit("Manual KSU hook: function not found in fs/exec.c: " + name)
+    body = m.group(0)
+    if "ksu_handle_execveat(" in body:
+        return source
+    if uses_syscall_args:
+        hook = ("#ifdef CONFIG_KSU\n"
+                "\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n"
+                "#endif\n\n")
+    else:
+        hook = ("#ifdef CONFIG_KSU\n"
+                "\t{\n"
+                "\t\tint ksu_fd = AT_FDCWD;\n"
+                "\t\tint ksu_flags = 0;\n"
+                "\t\tksu_handle_execveat(&ksu_fd, &filename, &argv, &envp, &ksu_flags);\n"
+                "\t}\n"
+                "#endif\n\n")
+    ret = re.compile(r"(?m)^\treturn do_execveat_common\(")
+    updated, n = ret.subn(lambda _: hook + "\treturn do_execveat_common(", body, count=1)
+    if not n:
+        raise SystemExit("Manual KSU hook: expected do_execveat_common return not found in " + name)
+    return source[:m.start()] + updated + source[m.end():]
+
+for name, syscall_args in (
+    ("do_execve", False),
+    ("do_execveat", True),
+    ("compat_do_execve", False),
+    ("compat_do_execveat", True),
+):
+    s = patch_exec_function(s, name, syscall_args)
+p.write_text(s)
+
+# faccessat.
+p, s = read("fs/open.c")
+if "extern int ksu_handle_faccessat(" not in s:
+    needle = '#include "internal.h"'
+    decl = '''#include "internal.h"
+
+#ifdef CONFIG_KSU
+extern int ksu_handle_faccessat(int *dfd, const char __user **filename_user,
+                                int *mode, int *flags);
+#endif'''
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: fs/open.c include anchor not found")
+    s = s.replace(needle, decl, 1)
+needle = "SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)\n{\n"
+call = needle + "#ifdef CONFIG_KSU\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n#endif\n\n"
+if "ksu_handle_faccessat(&dfd, &filename, &mode, NULL);" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: faccessat syscall anchor not found")
+    s = s.replace(needle, call, 1)
+p.write_text(s)
+
+# newfstatat, including 32-bit compat syscalls.
+p, s = read("fs/stat.c")
+if "extern int ksu_handle_stat(" not in s:
+    needle = '#include "internal.h"'
+    decl = '''#include "internal.h"
+
+#ifdef CONFIG_KSU
+extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
+#endif'''
+    if needle not in s:
+        needle = '#include <linux/uaccess.h>'
+        if needle not in s:
+            raise SystemExit("Manual KSU hook: fs/stat.c include anchor not found")
+        decl = needle + '''
+
+#ifdef CONFIG_KSU
+extern int ksu_handle_stat(int *dfd, const char __user **filename_user, int *flags);
+#endif'''
+    s = s.replace(needle, decl, 1)
+needle = ("SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,\n"
+          "\t\tstruct stat __user *, statbuf, int, flag)\n{\n")
+call = needle + "#ifdef CONFIG_KSU\n\tksu_handle_stat(&dfd, &filename, &flag);\n#endif\n\n"
+if "ksu_handle_stat(&dfd, &filename, &flag);" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: newfstatat syscall anchor not found")
+    s = s.replace(needle, call, 1)
+needle = ("COMPAT_SYSCALL_DEFINE4(newfstatat, unsigned int, dfd,\n"
+          "\t\t       const char __user *, filename,\n"
+          "\t\t       struct compat_stat __user *, statbuf, int, flag)\n{\n")
+call = needle + "#ifdef CONFIG_KSU\n\tksu_handle_stat((int *)&dfd, &filename, &flag);\n#endif\n\n"
+if "ksu_handle_stat((int *)&dfd, &filename, &flag);" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: compat newfstatat syscall anchor not found")
+    s = s.replace(needle, call, 1)
+p.write_text(s)
+
+# setresuid: invoke the current legacy branch callback from the syscall.
+p, s = read("kernel/sys.c")
+needle = "/*\n * This function implements a generic ability to update ruid, euid,\n"
+decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);\n#endif\n\n"
+if "extern int ksu_handle_setresuid(" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: setresuid declaration anchor not found")
+    s = s.replace(needle, decl + needle, 1)
+needle = "SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)\n{\n"
+call = needle + "#ifdef CONFIG_KSU\n\tksu_handle_setresuid(current_uid().val, ruid);\n#endif\n\n"
+if "ksu_handle_setresuid(current_uid().val, ruid);" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: setresuid syscall anchor not found")
+    s = s.replace(needle, call, 1)
+p.write_text(s)
+
+# Current legacy Kbuild checks for an old sys_reboot hook this source branch
+# no longer exports. Check the direct hook sites actually installed above.
+p = ksu / "kernel/Kbuild"
+s = p.read_text()
+old = 'HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_sys_reboot" $(srctree)/kernel/reboot.c && echo 0 || echo 1)'
+new = ('HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_execveat" $(srctree)/fs/exec.c && '
+       'grep -q "ksu_handle_faccessat" $(srctree)/fs/open.c && '
+       'grep -q "ksu_handle_stat" $(srctree)/fs/stat.c && '
+       'grep -q "ksu_handle_setresuid" $(srctree)/kernel/sys.c && echo 0 || echo 1)')
+if old in s:
+    s = s.replace(old, new, 1)
+elif new not in s:
+    raise SystemExit("Manual KSU hook: unable to update legacy KernelSU Kbuild prerequisite check")
+p.write_text(s)
+
+checks = {
+    "fs/exec.c": ("ksu_handle_execveat(&",),
+    "fs/open.c": ("ksu_handle_faccessat(&dfd, &filename, &mode, NULL);",),
+    "fs/stat.c": ("ksu_handle_stat(&dfd, &filename, &flag);",),
+    "kernel/sys.c": ("ksu_handle_setresuid(current_uid().val, ruid);",),
+}
+for rel, needles in checks.items():
+    _, s = read(rel)
+    for needle in needles:
+        if needle not in s:
+            raise SystemExit("Manual KSU hook verification failed: " + rel + " missing " + needle)
+
+print("KernelSU-Next manual hooks patched and verified (execve/execveat, faccessat, newfstatat, setresuid).")
+PY_MANUAL
+fi
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" "$DEFCONFIG"
 if [ "$KSU_ENABLED" -eq 1 ]; then
   case "${KSU_HOOK_MODE,,}" in
-    kprobes|kprobe)
-      log '[WARNING] Kprobes is experimental on Linux 4.14; Shadow Call Stack will be disabled (reduced return-address protection).'
-      run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable SHADOW_CALL_STACK --enable ROP_PROTECTION_NONE --enable KPROBES --enable KRETPROBES --enable KPROBE_EVENTS --enable KSU --disable KSU_MANUAL_HOOK --enable KSU_KPROBES_HOOK
-      EXPECTED='KPROBES KRETPROBES KPROBE_EVENTS KSU KSU_KPROBES_HOOK ROP_PROTECTION_NONE' ;;
     manual)
-      if ! grep -q 'ksu_handle_sys_reboot' "$ROOT/kernel/reboot.c"; then echo '[ERROR] Manual mode requires KernelSU-Next manual-hook patches; this source branch does not have them.' >&2; exit 2; fi
-      run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable KPROBES --enable KPROBE_EVENTS --enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK
-      EXPECTED='KPROBES KPROBE_EVENTS KSU KSU_MANUAL_HOOK' ;;
-    *) echo "[ERROR] KSU_HOOK_MODE must be kprobes or manual (got: $KSU_HOOK_MODE)." >&2; exit 2 ;;
+      log '[INFO] KernelSU-Next hook mode: manual; kprobes and syscall-table hooks are disabled.'
+      run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable KSU --enable KSU_MANUAL_HOOK --disable KSU_KPROBES_HOOK --disable KSU_SYSCALL_TABLE_HOOK --disable KPROBES --disable KRETPROBES --disable KPROBE_EVENTS
+      EXPECTED='KSU KSU_MANUAL_HOOK' ;;
+    *) echo "[ERROR] Only KSU_HOOK_MODE=manual is supported (got: $KSU_HOOK_MODE)." >&2; exit 2 ;;
   esac
 fi
 # Prefer ThinLTO by default: it retains LTO/CFI while reducing the high
@@ -192,7 +362,70 @@ esac
 
 run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" olddefconfig
-if [ "$KSU_ENABLED" -eq 1 ]; then for sym in $EXPECTED; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig." >&2; exit 1; }; done; fi
+if [ "$KSU_ENABLED" -eq 1 ]; then
+  for sym in $EXPECTED; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig." >&2; exit 1; }; done
+  if grep -qE '^CONFIG_(KPROBES|KRETPROBES|KPROBE_EVENTS|KSU_KPROBES_HOOK)=y
+case "$LTO_MODE" in
+  thin)
+    for sym in LTO_CLANG THINLTO CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for ThinLTO." >&2; exit 1; }; done ;;
+  full)
+    for sym in LTO_CLANG CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for full LTO." >&2; exit 1; }; done
+    if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then echo '[ERROR] THINLTO unexpectedly enabled in full mode.' >&2; exit 1; fi ;;
+  none)
+    if grep -qE '^CONFIG_(LTO_CLANG|CFI_CLANG)=y$' "$OUT_DIR/.config"; then echo '[ERROR] LTO/CFI remained enabled after selecting LTO_MODE=none.' >&2; exit 1; fi ;;
+esac
+if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
+[[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
+log "Compiling Image.lz4 with $JOBS jobs; existing out/ objects are retained."
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" -j"$JOBS" Image.lz4
+IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
+[ -s "$IMAGE" ] || { echo "[ERROR] Compiled image not found: $IMAGE" >&2; exit 1; }
+KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" kernelrelease)"
+SAFE_RELEASE="$(printf '%s' "$KERNELRELEASE" | sed 's/[^A-Za-z0-9._+-]/_/g')"
+KSU_TAG=''; if [ "$KSU_ENABLED" -eq 1 ]; then KSU_TAG=-ksun; fi
+ZIP_OUT="$DIST_DIR/AnyKernel3-$SAFE_KERNEL_NAME-flame-$SAFE_RELEASE$KSU_TAG.zip"
+if [ ! -f "$AK3_SOURCE/tools/ak3-core.sh" ] || [ ! -f "$AK3_SOURCE/anykernel.sh" ]; then
+  if [ -d "$AK3_SOURCE/.git" ]; then run_logged git -C "$AK3_SOURCE" fetch --depth=1 origin master; run_logged git -C "$AK3_SOURCE" reset --hard FETCH_HEAD;
+  else [ ! -e "$AK3_SOURCE" ] || mv "$AK3_SOURCE" "$AK3_SOURCE.incomplete.$(date +%Y%m%d%H%M%S)"; git clone --depth=1 --branch master https://github.com/osm0sis/AnyKernel3.git "$AK3_SOURCE" 2>&1 | tee -a "$LOG"; fi
+fi
+[ -f "$AK3_SOURCE/tools/ak3-core.sh" ] && [ -f "$AK3_SOURCE/anykernel.sh" ]
+STAGE_DIR="$(mktemp -d "$OUT_DIR/anykernel3-stage.XXXXXX")"
+cp -a "$AK3_SOURCE/." "$STAGE_DIR/"; rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch"
+for f in zImage zImage-dtb Image Image-dtb Image.gz Image.gz-dtb Image.bz2 Image.bz2-dtb Image.lzo Image.lzo-dtb Image.lzma Image.lzma-dtb Image.xz Image.xz-dtb Image.lz4 Image.lz4-dtb Image.fit dtb kernel_dtb dtbo.img; do rm -f "$STAGE_DIR/$f"; done
+cp "$IMAGE" "$STAGE_DIR/Image.lz4"
+cat > "$STAGE_DIR/anykernel.sh" <<'AK3'
+### AnyKernel3 kernel-only installer for Google Pixel 4 (flame)
+properties() { '
+kernel.string=__KERNEL_NAME__
+do.devicecheck=1
+do.modules=0
+do.systemless=0
+do.cleanup=1
+do.cleanuponabort=0
+device.name1=flame
+supported.versions=
+supported.patchlevels=
+supported.vendorpatchlevels=
+'; }
+BLOCK=auto;
+IS_SLOT_DEVICE=1;
+RAMDISK_COMPRESSION=auto;
+PATCH_VBMETA_FLAG=auto;
+. tools/ak3-core.sh;
+dump_boot;
+write_boot;
+AK3
+sed -i "s|__KERNEL_NAME__|$KERNEL_NAME|" "$STAGE_DIR/anykernel.sh"
+ZIP_TMP="$ZIP_OUT.tmp.$$"; rm -f "$ZIP_TMP"
+log "Packaging $IMAGE into $ZIP_OUT"
+(cd "$STAGE_DIR" && zip -qr9 "$ZIP_TMP" .)
+zip -T "$ZIP_TMP" | tee -a "$LOG"; mv -f "$ZIP_TMP" "$ZIP_OUT"; rm -rf "$STAGE_DIR"
+log 'SUCCESS'; log "Kernel name: $KERNEL_NAME"; log "Kernel release: $KERNELRELEASE"; log "Kernel image: $IMAGE"; log "AnyKernel3 ZIP: $ZIP_OUT"; log "Build log: $LOG"
+if [ "$KSU_ENABLED" -eq 1 ]; then log "KernelSU-Next enabled; hook mode: $KSU_HOOK_MODE"; else log 'KernelSU-Next disabled'; fi
+ "$OUT_DIR/.config"; then
+    echo '[ERROR] Kprobes-related configuration remained enabled in manual mode.' >&2; exit 1
+  fi
+fi
 case "$LTO_MODE" in
   thin)
     for sym in LTO_CLANG THINLTO CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for ThinLTO." >&2; exit 1; }; done ;;
