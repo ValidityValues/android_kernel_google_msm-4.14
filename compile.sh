@@ -185,15 +185,19 @@ def read(rel):
 
 # execve/execveat, native and compat.
 p, s = read("fs/exec.c")
-if "extern int ksu_handle_execveat(" not in s:
+if "extern int ksu_handle_execveat_ksud(" not in s:
     needle = '#include "internal.h"'
     if needle not in s:
         raise SystemExit("Manual KSU hook: fs/exec.c include anchor not found")
     s = s.replace(needle, needle + '''
 
 #ifdef CONFIG_KSU
-extern int ksu_handle_execveat(int *fd, struct filename **filename_ptr,
-                               void *argv, void *envp, int *flags);
+struct user_arg_ptr;
+extern int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+                                    struct user_arg_ptr *argv,
+                                    struct user_arg_ptr *envp, int *flags);
+extern int ksu_handle_execveat_sucompat(int *fd, struct filename **filename_ptr,
+                                        void *argv, void *envp, int *flags);
 #endif''', 1)
 
 def patch_exec_function(source, name, use_params):
@@ -213,7 +217,8 @@ def patch_exec_function(source, name, use_params):
         call = (
             "#ifdef CONFIG_KSU\n"
             "\t" + marker + "\n"
-            "\tksu_handle_execveat(&fd, &filename, &argv, &envp, &flags);\n"
+            "\tksu_handle_execveat_ksud(&fd, &filename, &argv, &envp, &flags);\n"
+            "\tksu_handle_execveat_sucompat(&fd, &filename, (void *)__argv, (void *)__envp, &flags);\n"
             "\treturn do_execveat_common(fd, filename, argv, envp, flags);\n"
             "#else\n"
             "\treturn do_execveat_common(" + match.group(1) + ");\n"
@@ -226,7 +231,8 @@ def patch_exec_function(source, name, use_params):
             "\t{\n"
             "\t\tint ksu_fd = AT_FDCWD;\n"
             "\t\tint ksu_flags = 0;\n"
-            "\t\tksu_handle_execveat(&ksu_fd, &filename, &argv, &envp, &ksu_flags);\n"
+            "\t\tksu_handle_execveat_ksud(&ksu_fd, &filename, &argv, &envp, &ksu_flags);\n"
+            "\t\tksu_handle_execveat_sucompat(&ksu_fd, &filename, (void *)__argv, (void *)__envp, &ksu_flags);\n"
             "\t\treturn do_execveat_common(ksu_fd, filename, argv, envp, ksu_flags);\n"
             "\t}\n"
             "#else\n"
@@ -259,30 +265,44 @@ if "extern int ksu_handle_faccessat(" not in s:
         raise SystemExit("Manual KSU hook: fs/open.c include anchor not found")
     s = s.replace(needle, needle + "\n\n" + decl, 1)
 needle = "SYSCALL_DEFINE3(faccessat, int, dfd, const char __user *, filename, int, mode)\n{\n"
-call = needle + "/* KSU-NEXT manual hook: faccessat */\n#ifdef CONFIG_KSU\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n#endif\n\n"
-if "KSU-NEXT manual hook: faccessat" not in s:
+marker = "/* KSU-NEXT manual hook: faccessat */"
+if marker not in s:
     if needle not in s:
         raise SystemExit("Manual KSU hook: faccessat syscall anchor not found")
-    s = s.replace(needle, call, 1)
+    start = s.index(needle) + len(needle)
+    point = s.find("\tif (mode & ~S_IRWXO)", start)
+    if point < 0:
+        raise SystemExit("Manual KSU hook: faccessat post-declaration anchor not found")
+    call = "\t" + marker + "\n#ifdef CONFIG_KSU\n\tksu_handle_faccessat(&dfd, &filename, &mode, NULL);\n#endif\n\n"
+    s = s[:point] + call + s[point:]
 p.write_text(s)
 
 # vfs_read: current legacy helper uses a struct file**/buffer/count/pos API.
 p, s = read("fs/read_write.c")
 needle = "ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)\n{\n"
-if "KSU-NEXT manual hook: vfs_read" not in s:
-    if needle not in s:
-        raise SystemExit("Manual KSU hook: vfs_read function anchor not found")
-    call = needle + '''#ifdef CONFIG_KSU
+decl = """#ifdef CONFIG_KSU
 extern bool ksu_vfs_read_hook;
 extern int ksu_handle_vfs_read(struct file **file_ptr, char __user **buf_ptr,
                                size_t *count_ptr, loff_t **pos);
-/* KSU-NEXT manual hook: vfs_read */
-if (unlikely(ksu_vfs_read_hook))
-\tksu_handle_vfs_read(&file, &buf, &count, &pos);
 #endif
 
-'''
-    s = s.replace(needle, call, 1)
+"""
+if "extern int ksu_handle_vfs_read(" not in s:
+    if needle not in s:
+        raise SystemExit("Manual KSU hook: vfs_read function anchor not found")
+    s = s.replace(needle, decl + needle, 1)
+body = needle + "\tssize_t ret;\n"
+if "KSU-NEXT manual hook: vfs_read" not in s:
+    if body not in s:
+        raise SystemExit("Manual KSU hook: vfs_read declaration anchor not found")
+    call = body + """#ifdef CONFIG_KSU
+\t/* KSU-NEXT manual hook: vfs_read */
+\tif (unlikely(ksu_vfs_read_hook))
+\t\tksu_handle_vfs_read(&file, &buf, &count, &pos);
+#endif
+
+"""
+    s = s.replace(body, call, 1)
 p.write_text(s)
 
 # newfstatat native and compat.
@@ -297,47 +317,48 @@ if "extern int ksu_handle_stat(" not in s:
     s = s.replace(needle, needle + "\n\n" + decl, 1)
 needle = ("SYSCALL_DEFINE4(newfstatat, int, dfd, const char __user *, filename,\n"
           "\t\tstruct stat __user *, statbuf, int, flag)\n{\n")
-call = needle + "/* KSU-NEXT manual hook: newfstatat */\n#ifdef CONFIG_KSU\n\tksu_handle_stat(&dfd, &filename, &flag);\n#endif\n\n"
-if "KSU-NEXT manual hook: newfstatat" not in s:
-    if needle not in s:
+marker = "/* KSU-NEXT manual hook: newfstatat */"
+target = "\tstruct kstat stat;\n\tint error;\n\n\terror = vfs_fstatat(dfd, filename, &stat, flag);"
+if marker not in s:
+    start = s.find(needle)
+    if start < 0:
         raise SystemExit("Manual KSU hook: newfstatat syscall anchor not found")
-    s = s.replace(needle, call, 1)
+    pos = s.find(target, start)
+    if pos < 0:
+        raise SystemExit("Manual KSU hook: newfstatat post-declaration anchor not found")
+    hook = "\t" + marker + "\n#ifdef CONFIG_KSU\n\tksu_handle_stat(&dfd, &filename, &flag);\n#endif\n\n"
+    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + target.length:]
 needle = ("COMPAT_SYSCALL_DEFINE4(newfstatat, unsigned int, dfd,\n"
           "\t\t       const char __user *, filename,\n"
           "\t\t       struct compat_stat __user *, statbuf, int, flag)\n{\n")
-call = needle + "#ifdef CONFIG_KSU\n\tksu_handle_stat((int *)&dfd, &filename, &flag);\n#endif\n\n"
-if "ksu_handle_stat((int *)&dfd, &filename, &flag);" not in s:
-    if needle not in s:
+marker = "/* KSU-NEXT manual hook: compat_newfstatat */"
+target = "\tstruct kstat stat;\n\tint error;\n\n\terror = vfs_fstatat(dfd, filename, &stat, flag);"
+if marker not in s:
+    start = s.find(needle)
+    if start < 0:
         raise SystemExit("Manual KSU hook: compat newfstatat anchor not found")
-    s = s.replace(needle, call, 1)
+    pos = s.find(target, start)
+    if pos < 0:
+        raise SystemExit("Manual KSU hook: compat newfstatat post-declaration anchor not found")
+    hook = "\t" + marker + "\n#ifdef CONFIG_KSU\n\tksu_handle_stat((int *)&dfd, &filename, &flag);\n#endif\n\n"
+    s = s[:pos] + target.replace("\n\n\terror = vfs_fstatat", "\n\n" + hook + "\terror = vfs_fstatat") + s[pos + target.length:]
 p.write_text(s)
 
-# setresuid manual equivalent of the former kprobe-dispatched callback.
-p, s = read("kernel/sys.c")
-decl = "#ifdef CONFIG_KSU\nextern int ksu_handle_setresuid(uid_t old_uid, uid_t new_uid);\n#endif\n\n"
-needle = "/*\n * This function implements a generic ability to update ruid, euid,\n"
-if "extern int ksu_handle_setresuid(" not in s:
-    if needle not in s:
-        raise SystemExit("Manual KSU hook: setresuid declaration anchor not found")
-    s = s.replace(needle, decl + needle, 1)
-needle = "SYSCALL_DEFINE3(setresuid, uid_t, ruid, uid_t, euid, uid_t, suid)\n{\n"
-call = needle + "/* KSU-NEXT manual hook: setresuid */\n#ifdef CONFIG_KSU\n\tksu_handle_setresuid(current_uid().val, ruid);\n#endif\n\n"
-if "KSU-NEXT manual hook: setresuid" not in s:
-    if needle not in s:
-        raise SystemExit("Manual KSU hook: setresuid syscall anchor not found")
-    s = s.replace(needle, call, 1)
-p.write_text(s)
-
+# setresuid is handled by KernelSU-Next's direct non-kprobe LSM task_fix_setuid hook.
 # Replace the current branch's stale ksu_handle_sys_reboot check with checks
 # for the actual call sites inserted above.
 p = ksu / "kernel/Kbuild"
 s = p.read_text()
+# This legacy branch uses mixed declarations; suppress this warning only inside
+# KernelSU-Next so the older kernel's gnu89 -Werror policy remains unchanged.
+if "ccflags-y += -Wno-declaration-after-statement" not in s:
+    s = "ccflags-y += -Wno-declaration-after-statement\n" + s
 old = 'HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_sys_reboot" $(srctree)/kernel/reboot.c && echo 0 || echo 1)'
-new = ('HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_execveat" $(srctree)/fs/exec.c && '
+new = ('HAVE_KSU_HOOK := $(shell grep -q "ksu_handle_execveat_ksud" $(srctree)/fs/exec.c && '
+       'grep -q "ksu_handle_execveat_sucompat" $(srctree)/fs/exec.c && '
        'grep -q "ksu_handle_faccessat" $(srctree)/fs/open.c && '
        'grep -q "ksu_handle_vfs_read" $(srctree)/fs/read_write.c && '
-       'grep -q "ksu_handle_stat" $(srctree)/fs/stat.c && '
-       'grep -q "ksu_handle_setresuid" $(srctree)/kernel/sys.c && echo 0 || echo 1)')
+       'grep -q "ksu_handle_stat" $(srctree)/fs/stat.c && echo 0 || echo 1)')
 if old in s:
     s = s.replace(old, new, 1)
 elif new not in s:
@@ -345,11 +366,18 @@ elif new not in s:
 p.write_text(s)
 
 checks = {
-    "fs/exec.c": ("KSU-NEXT manual hook: do_execve", "KSU-NEXT manual hook: do_execveat"),
+    "fs/exec.c": (
+        "KSU-NEXT manual hook: do_execve",
+        "KSU-NEXT manual hook: do_execveat",
+        "KSU-NEXT manual hook: compat_do_execve",
+        "KSU-NEXT manual hook: compat_do_execveat",
+    ),
     "fs/open.c": ("KSU-NEXT manual hook: faccessat",),
     "fs/read_write.c": ("KSU-NEXT manual hook: vfs_read",),
-    "fs/stat.c": ("KSU-NEXT manual hook: newfstatat",),
-    "kernel/sys.c": ("KSU-NEXT manual hook: setresuid",),
+    "fs/stat.c": (
+        "KSU-NEXT manual hook: newfstatat",
+        "KSU-NEXT manual hook: compat_newfstatat",
+    ),
 }
 for rel, markers in checks.items():
     _, s = read(rel)
@@ -357,7 +385,7 @@ for rel, markers in checks.items():
         if marker not in s:
             raise SystemExit("Manual KSU hook verification failed: " + rel + " missing " + marker)
 
-print("KernelSU-Next manual hooks patched and verified (execve, execveat, faccessat, vfs_read, newfstatat, setresuid).")
+print("KernelSU-Next manual hooks patched and verified (execve/execveat native+compat, faccessat, vfs_read, newfstatat native+compat; setresuid via non-kprobe LSM hook).")
 PY_MANUAL
 fi
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
