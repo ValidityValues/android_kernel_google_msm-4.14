@@ -13,7 +13,7 @@ on:
         description: 'Integrate KernelSU-Next with manual hooks only'
         required: true
         type: boolean
-        default: false
+        default: true
       lto_mode:
         description: 'ThinLTO recommended. Full LTO uses more memory; none disables LTO and CFI.'
         required: true
@@ -66,6 +66,7 @@ jobs:
         run: |
           grep -q 'int do_execve(' fs/exec.c
           grep -q 'SYSCALL_DEFINE3(faccessat' fs/open.c
+          grep -q 'ssize_t vfs_read(' fs/read_write.c
           grep -q 'SYSCALL_DEFINE4(newfstatat' fs/stat.c
           grep -q 'SYSCALL_DEFINE3(setresuid' kernel/sys.c
           echo 'Manual-hook source anchors found; compile.sh will apply and verify the integration patches.'
