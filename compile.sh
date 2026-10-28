@@ -118,10 +118,15 @@ s = p.read_text()
 original = s
 
 old_include = "#ifndef KSU_HAS_PATH_UMOUNT\n#include <linux/syscalls.h>\n#endif"
-new_include = "#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)\n#include <linux/syscalls.h>\n#endif"
+new_include = "#include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)\n#include <linux/syscalls.h>\n#endif"
+already_patched_include = "#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)\n#include <linux/syscalls.h>\n#endif"
 if old_include in s:
     s = s.replace(old_include, new_include, 1)
-elif new_include not in s:
+elif new_include in s:
+    pass
+elif already_patched_include in s:
+    s = s.replace(already_patched_include, new_include, 1)
+else:
     raise SystemExit("Could not safely patch KernelSU kernel_umount.c syscalls include guard.")
 
 old_cond = re.compile(
