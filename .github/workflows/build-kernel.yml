@@ -10,7 +10,7 @@ on:
         type: string
         default: 'Validity Pixel 4 Kernel'
       kernelsu_next:
-        description: 'Integrate KernelSU-Next (legacy branch)'
+        description: 'Integrate KernelSU-Next with manual hooks only'
         required: true
         type: boolean
         default: false
@@ -23,14 +23,6 @@ on:
           - thin
           - full
           - none
-      ksu_hook_mode:
-        description: 'kprobes is experimental on Linux 4.14; manual requires kernel source patches'
-        required: true
-        type: choice
-        default: kprobes
-        options:
-          - kprobes
-          - manual
 
 permissions:
   contents: read
@@ -70,18 +62,19 @@ jobs:
           key: android-clang-r416183b-${{ runner.os }}
 
       - name: Validate manual-hook prerequisites
-        if: ${{ inputs.kernelsu_next && inputs.ksu_hook_mode == 'manual' }}
+        if: ${{ inputs.kernelsu_next }}
         run: |
-          if ! grep -q 'ksu_handle_sys_reboot' kernel/reboot.c; then
-            echo '::error title=Manual KernelSU hooks are missing::This branch has no manual-hook patches. Select kprobes, or apply and commit the manual-hook patch series first.'
-            exit 1
-          fi
+          grep -q 'int do_execve(' fs/exec.c
+          grep -q 'SYSCALL_DEFINE3(faccessat' fs/open.c
+          grep -q 'SYSCALL_DEFINE4(newfstatat' fs/stat.c
+          grep -q 'SYSCALL_DEFINE3(setresuid' kernel/sys.c
+          echo 'Manual-hook source anchors found; compile.sh will apply and verify the integration patches.'
 
       - name: Build and package AnyKernel3 ZIP
         env:
           KERNEL_NAME: ${{ inputs.kernel_name }}
           KSU_NEXT: ${{ inputs.kernelsu_next }}
-          KSU_HOOK_MODE: ${{ inputs.ksu_hook_mode }}
+          KSU_HOOK_MODE: manual
           LTO_MODE: ${{ inputs.lto_mode }}
           JOBS: '3'
         run: |
