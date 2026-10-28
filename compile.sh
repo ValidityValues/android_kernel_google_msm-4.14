@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pixel 4 (floral) Android 4.14 kernel build + AnyKernel3 package.
-# Options: KERNEL_NAME, KSU_NEXT, KSU_HOOK_MODE=kprobes|manual, JOBS.
+# Options: KERNEL_NAME, KSU_NEXT, KSU_HOOK_MODE=kprobes|manual, LTO_MODE=thin|full|none, JOBS.
 set -Ee pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 OUT_DIR="$ROOT/out"
@@ -21,6 +21,12 @@ KSU_REPO_URL=https://github.com/KernelSU-Next/KernelSU-Next.git
 KSU_BRANCH=legacy
 
 if [ -z "$KERNEL_NAME" ]; then KERNEL_NAME='Validity Pixel 4 Kernel'; fi
+if [ -z "$LTO_MODE" ]; then LTO_MODE=thin; fi
+LTO_MODE="$(printf '%s' "$LTO_MODE" | tr '[:upper:]' '[:lower:]')"
+case "$LTO_MODE" in
+  thin|full|none) ;;
+  *) echo '[ERROR] LTO_MODE must be thin, full, or none.' >&2; exit 2 ;;
+esac
 if ! printf '%s\n' "$KERNEL_NAME" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._ +()-]{0,79}$'; then
   echo '[ERROR] KERNEL_NAME must be 1-80 chars: letters, digits, spaces, . _ + ( ) -' >&2; exit 2
 fi
@@ -114,9 +120,32 @@ if [ "$KSU_ENABLED" -eq 1 ]; then
     *) echo "[ERROR] KSU_HOOK_MODE must be kprobes or manual (got: $KSU_HOOK_MODE)." >&2; exit 2 ;;
   esac
 fi
+# Prefer ThinLTO by default: it retains LTO/CFI while reducing the high
+# memory/time cost of full LTO during vmlinux.o linking.
+case "$LTO_MODE" in
+  thin)
+    log '[INFO] LTO mode: ThinLTO (CFI remains enabled).'
+    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable LTO_CLANG --enable THINLTO --enable CFI_CLANG ;;
+  full)
+    log '[WARNING] LTO mode: full LTO (high memory usage).'
+    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable LTO_CLANG --disable THINLTO --enable CFI_CLANG ;;
+  none)
+    log '[WARNING] LTO mode: disabled (CFI/LTO protection will be disabled).'
+    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable CFI_CLANG --disable THINLTO --disable LTO_CLANG ;;
+esac
+
 run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" olddefconfig
 if [ "$KSU_ENABLED" -eq 1 ]; then for sym in $EXPECTED; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig." >&2; exit 1; }; done; fi
+case "$LTO_MODE" in
+  thin)
+    for sym in LTO_CLANG THINLTO CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for ThinLTO." >&2; exit 1; }; done ;;
+  full)
+    for sym in LTO_CLANG CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for full LTO." >&2; exit 1; }; done
+    if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then echo '[ERROR] THINLTO unexpectedly enabled in full mode.' >&2; exit 1; fi ;;
+  none)
+    if grep -qE '^CONFIG_(LTO_CLANG|CFI_CLANG)=y$' "$OUT_DIR/.config"; then echo '[ERROR] LTO/CFI remained enabled after selecting LTO_MODE=none.' >&2; exit 1; fi ;;
+esac
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
 log "Compiling Image.lz4 with $JOBS jobs; existing out/ objects are retained."
