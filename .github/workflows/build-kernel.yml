@@ -14,6 +14,15 @@ on:
         required: true
         type: boolean
         default: false
+      lto_mode:
+        description: 'ThinLTO recommended. Full LTO uses more memory; none disables LTO and CFI.'
+        required: true
+        type: choice
+        default: thin
+        options:
+          - thin
+          - full
+          - none
       ksu_hook_mode:
         description: 'kprobes is experimental on Linux 4.14; manual requires kernel source patches'
         required: true
@@ -73,9 +82,19 @@ jobs:
           KERNEL_NAME: ${{ inputs.kernel_name }}
           KSU_NEXT: ${{ inputs.kernelsu_next }}
           KSU_HOOK_MODE: ${{ inputs.ksu_hook_mode }}
+          LTO_MODE: ${{ inputs.lto_mode }}
           JOBS: '3'
         run: |
           chmod +x compile.sh
+          (
+            while sleep 60; do
+              echo "::notice::Build heartbeat $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+              free -h
+              ps -C ld.lld -C clang -C ld -o pid,etime,%cpu,%mem,rss,comm --sort=-rss | head -n 8 || true
+            done
+          ) &
+          watcher=$!
+          trap 'kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true' EXIT
           ./compile.sh
 
       - name: Upload kernel ZIP and diagnostic files
