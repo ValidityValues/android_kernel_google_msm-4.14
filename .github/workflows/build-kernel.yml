@@ -1,0 +1,91 @@
+name: Build Pixel 4 Kernel
+run-name: Build ${{ inputs.kernel_name }} by @${{ github.actor }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_name:
+        description: 'Kernel name shown in the installer and kernel release'
+        required: true
+        type: string
+        default: 'Validity Pixel 4 Kernel'
+      kernelsu_next:
+        description: 'Integrate KernelSU-Next (legacy branch)'
+        required: true
+        type: boolean
+        default: false
+      ksu_hook_mode:
+        description: 'kprobes is experimental on Linux 4.14; manual requires kernel source patches'
+        required: true
+        type: choice
+        default: kprobes
+        options:
+          - kprobes
+          - manual
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pixel4-kernel-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Compile and package (Pixel 4 / floral)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/share/dotnet /usr/local/share/boost /usr/local/.ghcup
+          df -h /
+
+      - name: Checkout kernel source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install kernel build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            bc bison build-essential ca-certificates curl flex git \
+            libelf-dev libncurses-dev libssl-dev lz4 make perl python3 zip
+
+      - name: Cache Android Clang toolchain
+        uses: actions/cache@v4
+        with:
+          path: .toolchains/clang-r416183b
+          key: android-clang-r416183b-${{ runner.os }}
+
+      - name: Validate manual-hook prerequisites
+        if: ${{ inputs.kernelsu_next && inputs.ksu_hook_mode == 'manual' }}
+        run: |
+          if ! grep -q 'ksu_handle_sys_reboot' kernel/reboot.c; then
+            echo '::error title=Manual KernelSU hooks are missing::This branch has no manual-hook patches. Select kprobes, or apply and commit the manual-hook patch series first.'
+            exit 1
+          fi
+
+      - name: Build and package AnyKernel3 ZIP
+        env:
+          KERNEL_NAME: ${{ inputs.kernel_name }}
+          KSU_NEXT: ${{ inputs.kernelsu_next }}
+          KSU_HOOK_MODE: ${{ inputs.ksu_hook_mode }}
+          JOBS: '3'
+        run: |
+          chmod +x compile.sh
+          ./compile.sh
+
+      - name: Upload kernel ZIP and diagnostic files
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: pixel4-kernel-${{ github.run_number }}
+          path: |
+            dist/*.zip
+            out/compile.log
+            out/.config
+          if-no-files-found: warn
+          retention-days: 14
