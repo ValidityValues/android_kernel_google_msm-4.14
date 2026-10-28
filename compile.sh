@@ -103,6 +103,41 @@ if not n: raise SystemExit('Found __poll_t conflict, but guarded block did not m
 p.write_text(s)
 PY_POLL
   fi
+
+  # KernelSU-Next's legacy branch may select path_umount() when
+  # KSU_HAS_PATH_UMOUNT is defined, but this Linux 4.14 tree does not provide
+  # that symbol. Force its existing pre-5.9 sys_umount() compatibility path.
+  KSU_UMOUNT="$KSU_DIR/kernel/feature/kernel_umount.c"
+  if [ -f "$KSU_UMOUNT" ]; then
+    python3 - "$KSU_UMOUNT" <<'PY_UMOUNT'
+from pathlib import Path
+import re, sys
+
+p = Path(sys.argv[1])
+s = p.read_text()
+original = s
+
+old_include = "#ifndef KSU_HAS_PATH_UMOUNT\n#include <linux/syscalls.h>\n#endif"
+new_include = "#if LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)\n#include <linux/syscalls.h>\n#endif"
+if old_include in s:
+    s = s.replace(old_include, new_include, 1)
+elif new_include not in s:
+    raise SystemExit("Could not safely patch KernelSU kernel_umount.c syscalls include guard.")
+
+old_cond = re.compile(
+    r"(?m)^#if LINUX_VERSION_CODE >= KERNEL_VERSION\(5, 9, 0\) \|\|[ \t]*\\\r?\n[ \t]*defined\(KSU_HAS_PATH_UMOUNT\)$"
+)
+s, count = old_cond.subn("#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)", s, count=1)
+if count == 0 and "#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 9, 0)\nextern int path_umount" not in s:
+    raise SystemExit("Could not safely patch KernelSU path_umount version guard.")
+
+if s != original:
+    p.write_text(s)
+    print("Patched KernelSU kernel_umount.c for Linux 4.14 sys_umount compatibility.")
+else:
+    print("KernelSU kernel_umount.c compatibility patch already applied.")
+PY_UMOUNT
+  fi
 fi
 
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
