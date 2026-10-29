@@ -143,9 +143,9 @@ IS_SLOT_DEVICE=1;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
 . tools/ak3-core.sh;
-# Resolve the boot alias and active slot before split_boot checks the block path.
-# reset_ak calls setup_ak; split_boot/flash_boot preserve the original ramdisk and DTB.
-reset_ak;
+# Sourcing tools/ak3-core.sh has already called setup_ak and resolved BLOCK=boot
+# to the active slot. split_boot/flash_boot update only the kernel and preserve the
+# existing ramdisk, boot-image DTB, and original boot image metadata.
 split_boot;
 flash_boot;
 AK3
@@ -155,9 +155,10 @@ for required in Image.lz4 version anykernel.sh tools/ak3-core.sh; do
 done
 grep -Fq 'BLOCK=boot;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'IS_SLOT_DEVICE=1;' "$STAGE_DIR/anykernel.sh"
-grep -Fq 'reset_ak;' "$STAGE_DIR/anykernel.sh"
+grep -Fq '. tools/ak3-core.sh;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'split_boot;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'flash_boot;' "$STAGE_DIR/anykernel.sh"
+! grep -Fq 'reset_ak;' "$STAGE_DIR/anykernel.sh"
 bash -n "$STAGE_DIR/anykernel.sh"
 ZIP_TMP="$ZIP_OUT.tmp.$$"; rm -f "$ZIP_TMP"
 log "Packaging $IMAGE into $ZIP_OUT"
