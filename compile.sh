@@ -92,7 +92,7 @@ log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= "$DEFCONFIG"
 # Match LineageOS's build.config.floral_no-cfi profile: it checks floral_defconfig,
 # then disables clang LTO/CFI options before olddefconfig. Keep device/DTB settings intact.
-for sym in BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
+for sym in MODULES MODVERSIONS BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
   grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] floral_defconfig lost CONFIG_$sym=y before no-CFI overrides." >&2; exit 1; }
 done
 run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LTO --disable LTO_CLANG --disable CFI --disable CFI_PERMISSIVE --disable CFI_CLANG --disable THINLTO --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
@@ -103,7 +103,7 @@ for sym in LTO LTO_CLANG CFI CFI_PERMISSIVE CFI_CLANG THINLTO; do
     exit 1
   fi
 done
-for sym in BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
+for sym in MODULES MODVERSIONS BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
   grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] floral_no-cfi profile lost CONFIG_$sym=y." >&2; exit 1; }
 done
 grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config" || { echo '[ERROR] LOCALVERSION_AUTO must be disabled.' >&2; exit 1; }
