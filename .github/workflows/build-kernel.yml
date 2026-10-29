@@ -9,15 +9,6 @@ on:
         required: true
         type: string
         default: 'Validity Pixel 4 Kernel'
-      lto_mode:
-        description: 'ThinLTO recommended. Full LTO uses more memory; none disables LTO and CFI.'
-        required: true
-        type: choice
-        default: thin
-        options:
-          - thin
-          - full
-          - none
 
 permissions:
   contents: read
@@ -60,15 +51,21 @@ jobs:
         run: |
           bash -n compile.sh
           grep -q 'DEFCONFIG=floral_defconfig' compile.sh
+          grep -q 'reset_ak;' compile.sh
           grep -q 'BLOCK=boot;' compile.sh
           grep -q 'IS_SLOT_DEVICE=1;' compile.sh
           grep -q 'split_boot;' compile.sh
           grep -q 'flash_boot;' compile.sh
+          grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
+          grep -q 'sm8150-v2.dtb' compile.sh
+          if grep -Eq 'KSU_NEXT|KSU_HOOK_MODE|KSU_TAG|KSU_REPO_URL|PY_MANUAL|KernelSU-Next.git' compile.sh .github/workflows/build-kernel.yml; then
+            echo 'KernelSU integration residue found in clean baseline workflow.' >&2
+            exit 1
+          fi
 
       - name: Build and package AnyKernel3 ZIP
         env:
           KERNEL_NAME: ${{ inputs.kernel_name }}
-          LTO_MODE: ${{ inputs.lto_mode }}
           JOBS: '3'
         run: |
           chmod +x compile.sh
@@ -92,5 +89,9 @@ jobs:
             dist/*.zip
             out/compile.log
             out/.config
+            out/arch/arm64/boot/Image.lz4
+            out/arch/arm64/boot/dtbo.img
+            out/arch/arm64/boot/dts/google/qcom-base/sm8150.dtb
+            out/arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
           if-no-files-found: warn
           retention-days: 14
