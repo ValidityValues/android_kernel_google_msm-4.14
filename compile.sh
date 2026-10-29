@@ -91,6 +91,7 @@ case "$LTO_MODE" in
     run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable CFI_CLANG --disable THINLTO --disable LTO_CLANG ;;
 esac
 
+run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" olddefconfig
 case "$LTO_MODE" in
   thin)
