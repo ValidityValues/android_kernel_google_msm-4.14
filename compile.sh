@@ -6,6 +6,8 @@ ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 OUT_DIR="$ROOT/out"
 TOOLCHAIN_DIR="$ROOT/.toolchains"
 DIST_DIR="$ROOT/dist"
+# Never reuse object files or ZIPs from an earlier build; keep only the downloaded toolchain cache.
+rm -rf "$OUT_DIR" "$DIST_DIR"
 mkdir -p "$OUT_DIR" "$TOOLCHAIN_DIR" "$DIST_DIR"
 LOG="$OUT_DIR/compile.log"
 ARCH=arm64
@@ -101,7 +103,7 @@ case "$LTO_MODE" in
 esac
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
-log "Compiling Image.lz4 with $JOBS jobs; existing out/ objects are retained."
+log "Compiling clean Image.lz4 baseline with $JOBS jobs (no integration patches)."
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" -j"$JOBS" Image.lz4
 IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
 [ -s "$IMAGE" ] || { echo "[ERROR] Compiled image not found: $IMAGE" >&2; exit 1; }
@@ -126,7 +128,7 @@ for f in zImage zImage-dtb Image Image-dtb Image.gz Image.gz-dtb Image.bz2 Image
 # Kernel-only update: do not package a different ROM's DTB/DTBO. AnyKernel3 will preserve
 # the boot image's current ramdisk and embedded DTB and leave the dtbo partition untouched.
 cp "$IMAGE" "$STAGE_DIR/Image.lz4"
-printf '%s\\n' "$KERNELRELEASE" > "$STAGE_DIR/version"
+printf '%s\n' "$KERNELRELEASE" > "$STAGE_DIR/version"
 cat > "$STAGE_DIR/anykernel.sh" <<'AK3'
 ### AnyKernel3 kernel-only installer for Google Pixel 4 (flame)
 properties() { '
