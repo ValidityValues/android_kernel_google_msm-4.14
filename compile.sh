@@ -150,8 +150,8 @@ STAGE_DIR="$(mktemp -d "$OUT_DIR/anykernel3-stage.XXXXXX")"
 cp -a "$AK3_SOURCE/." "$STAGE_DIR/"
 rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/.github" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch" "$STAGE_DIR/modules" "$STAGE_DIR/vendor_dlkm" "$STAGE_DIR/vendor_dlkm.img" "$STAGE_DIR/system_dlkm" "$STAGE_DIR/system_dlkm.img"
 for f in zImage zImage-dtb Image Image-dtb Image.gz Image.gz-dtb Image.bz2 Image.bz2-dtb Image.lzo Image.lzo-dtb Image.lzma Image.lzma-dtb Image.xz Image.xz-dtb Image.lz4 Image.lz4-dtb Image.fit dtb kernel_dtb dtbo.img; do rm -f "$STAGE_DIR/$f"; done
-# Kernel-only update: do not package a different ROM's DTB/DTBO. AnyKernel3 will preserve
-# the boot image's current ramdisk and embedded DTB and leave the dtbo partition untouched.
+# Kernel-only update: keep DTB/DTBO from the installed ROM. The standard AnyKernel3
+# flow repacks the source ramdisk and preserves the boot image's separate DTB field.
 cp "$IMAGE" "$STAGE_DIR/Image.lz4"
 printf '%s\n' "$KERNELRELEASE" > "$STAGE_DIR/version"
 cat > "$STAGE_DIR/anykernel.sh" <<'AK3'
@@ -186,8 +186,10 @@ done
 grep -Fq 'BLOCK=boot;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'IS_SLOT_DEVICE=1;' "$STAGE_DIR/anykernel.sh"
 grep -Fq '. tools/ak3-core.sh;' "$STAGE_DIR/anykernel.sh"
-grep -Fq 'split_boot;' "$STAGE_DIR/anykernel.sh"
-grep -Fq 'flash_boot;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'dump_boot;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'write_boot;' "$STAGE_DIR/anykernel.sh"
+! grep -Fq 'split_boot;' "$STAGE_DIR/anykernel.sh"
+! grep -Fq 'flash_boot;' "$STAGE_DIR/anykernel.sh"
 ! grep -Fq 'reset_ak;' "$STAGE_DIR/anykernel.sh"
 bash -n "$STAGE_DIR/anykernel.sh"
 ZIP_TMP="$ZIP_OUT.tmp.$$"; rm -f "$ZIP_TMP"
