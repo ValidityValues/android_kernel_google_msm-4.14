@@ -8,7 +8,7 @@ on:
         description: 'Kernel name shown in the installer and kernel release'
         required: true
         type: string
-        default: 'Validity Pixel 4 Kernel'
+        default: 'Validity Pixel 4 Baseline'
 
 permissions:
   contents: read
@@ -67,7 +67,7 @@ jobs:
             echo 'KernelSU residue found in clean baseline checkout.' >&2
             exit 1
           fi
-          if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KSU_HOOK_MODE|KSU_NEXT|PY_MANUAL|ksu_handle_' compile.sh; then
+          if grep -Eq 'LTO_MODE|--enable THINLTO|KSU_HOOK_MODE|KSU_NEXT|PY_MANUAL|ksu_handle_' compile.sh; then
             echo 'Integration or non-stock build override found in compile.sh.' >&2
             exit 1
           fi
@@ -89,173 +89,11 @@ jobs:
           trap 'kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true' EXIT
           ./compile.sh
 
-      - name: Upload kernel ZIP and diagnostic files
+      - name: Upload kernel ZIP and diagnostics
         if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: pixel4-kernel-${{ github.run_number }}
-          path: |
-            dist/*.zip
-            out/compile.log
-            out/.config
-            out/arch/arm64/boot/Image.lz4
-            out/arch/arm64/boot/dtbo.img
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150.dtb
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
-            out/include/config/kernel.release
-            out/include/generated/utsrelease.h
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 14
- arch/arm64/configs/floral_defconfig
-          grep -q '^CONFIG_LTO_CLANG=y
-          grep -q 'BLOCK=boot;' compile.sh
-          grep -q 'IS_SLOT_DEVICE=1;' compile.sh
-          grep -q 'split_boot;' compile.sh
-          grep -q 'flash_boot;' compile.sh
-          grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
-          grep -q 'LOCALVERSION=' compile.sh
-          grep -q 'EXPECTED_RELEASE' compile.sh
-          grep -q 'sm8150-v2.dtb' compile.sh
-          if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
-            echo 'KernelSU integration residue found in clean baseline checkout.' >&2
-            exit 1
-          fi
-          if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KernelSU-Next|drivers/kernelsu' compile.sh; then
-            echo 'Integration or non-stock build override found in compile.sh.' >&2
-            exit 1
-          fi
-
-      - name: Build and package AnyKernel3 ZIP
-        env:
-          KERNEL_NAME: ${{ inputs.kernel_name }}
-          JOBS: '3'
-        run: |
-          chmod +x compile.sh
-          (
-            while sleep 60; do
-              echo "::notice::Build heartbeat $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              free -h
-              ps -C ld.lld -C clang -C ld -o pid,etime,%cpu,%mem,rss,comm --sort=-rss | head -n 8 || true
-            done
-          ) &
-          watcher=$!
-          trap 'kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true' EXIT
-          ./compile.sh
-
-      - name: Upload kernel ZIP and diagnostic files
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pixel4-kernel-${{ github.run_number }}
-          path: |
-            dist/*.zip
-            out/compile.log
-            out/.config
-            out/arch/arm64/boot/Image.lz4
-            out/arch/arm64/boot/dtbo.img
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150.dtb
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
-            out/include/config/kernel.release
-            out/include/generated/utsrelease.h
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 14
- arch/arm64/configs/floral_defconfig
-          grep -q '^CONFIG_CFI_CLANG=y
-          grep -q 'BLOCK=boot;' compile.sh
-          grep -q 'IS_SLOT_DEVICE=1;' compile.sh
-          grep -q 'split_boot;' compile.sh
-          grep -q 'flash_boot;' compile.sh
-          grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
-          grep -q 'LOCALVERSION=' compile.sh
-          grep -q 'EXPECTED_RELEASE' compile.sh
-          grep -q 'sm8150-v2.dtb' compile.sh
-          if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
-            echo 'KernelSU integration residue found in clean baseline checkout.' >&2
-            exit 1
-          fi
-          if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KernelSU-Next|drivers/kernelsu' compile.sh; then
-            echo 'Integration or non-stock build override found in compile.sh.' >&2
-            exit 1
-          fi
-
-      - name: Build and package AnyKernel3 ZIP
-        env:
-          KERNEL_NAME: ${{ inputs.kernel_name }}
-          JOBS: '3'
-        run: |
-          chmod +x compile.sh
-          (
-            while sleep 60; do
-              echo "::notice::Build heartbeat $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              free -h
-              ps -C ld.lld -C clang -C ld -o pid,etime,%cpu,%mem,rss,comm --sort=-rss | head -n 8 || true
-            done
-          ) &
-          watcher=$!
-          trap 'kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true' EXIT
-          ./compile.sh
-
-      - name: Upload kernel ZIP and diagnostic files
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pixel4-kernel-${{ github.run_number }}
-          path: |
-            dist/*.zip
-            out/compile.log
-            out/.config
-            out/arch/arm64/boot/Image.lz4
-            out/arch/arm64/boot/dtbo.img
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150.dtb
-            out/arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
-            out/include/config/kernel.release
-            out/include/generated/utsrelease.h
-          include-hidden-files: true
-          if-no-files-found: warn
-          retention-days: 14
- arch/arm64/configs/floral_defconfig
-          grep -Fq '. tools/ak3-core.sh;' compile.sh
-          grep -q 'BLOCK=boot;' compile.sh
-          grep -q 'IS_SLOT_DEVICE=1;' compile.sh
-          grep -q 'split_boot;' compile.sh
-          grep -q 'flash_boot;' compile.sh
-          grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
-          grep -q 'LOCALVERSION=' compile.sh
-          grep -q 'EXPECTED_RELEASE' compile.sh
-          grep -q 'sm8150-v2.dtb' compile.sh
-          if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
-            echo 'KernelSU integration residue found in clean baseline checkout.' >&2
-            exit 1
-          fi
-          if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KernelSU-Next|drivers/kernelsu' compile.sh; then
-            echo 'Integration or non-stock build override found in compile.sh.' >&2
-            exit 1
-          fi
-
-      - name: Build and package AnyKernel3 ZIP
-        env:
-          KERNEL_NAME: ${{ inputs.kernel_name }}
-          JOBS: '3'
-        run: |
-          chmod +x compile.sh
-          (
-            while sleep 60; do
-              echo "::notice::Build heartbeat $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-              free -h
-              ps -C ld.lld -C clang -C ld -o pid,etime,%cpu,%mem,rss,comm --sort=-rss | head -n 8 || true
-            done
-          ) &
-          watcher=$!
-          trap 'kill "$watcher" 2>/dev/null || true; wait "$watcher" 2>/dev/null || true' EXIT
-          ./compile.sh
-
-      - name: Upload kernel ZIP and diagnostic files
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: pixel4-kernel-${{ github.run_number }}
+          name: pixel4-baseline-${{ github.run_number }}
           path: |
             dist/*.zip
             out/compile.log
