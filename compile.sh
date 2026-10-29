@@ -68,11 +68,11 @@ export PATH="$CLANG_BIN:$PATH"
 log "Compiler: $($CLANG_BIN/clang --version | head -n 1)"
 
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" "$DEFCONFIG"
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= "$DEFCONFIG"
 # Keep stock floral LTO/CFI and device settings. Only stabilize UTS_RELEASE:
 # auto Git suffixes from our fork's workflow-only commits can break module vermagic.
 run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= olddefconfig
 for sym in LTO_CLANG CFI_CLANG BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
   grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] Stock floral profile lost CONFIG_$sym=y." >&2; exit 1; }
 done
@@ -89,7 +89,7 @@ fi
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
 log "Compiling stock floral artifacts (Image.lz4, dtbo.img, sm8150*.dtb) with $JOBS jobs; no integration patches."
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" -j"$JOBS" Image.lz4 dtbo.img arch/arm64/boot/dts/google/qcom-base/sm8150.dtb arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= -j"$JOBS" Image.lz4 dtbo.img arch/arm64/boot/dts/google/qcom-base/sm8150.dtb arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
 IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
 DTBO="$OUT_DIR/arch/arm64/boot/dtbo.img"
 DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
@@ -97,7 +97,7 @@ DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
 [ -s "$DTBO" ] || { echo "[ERROR] Compiled DTBO missing: $DTBO" >&2; exit 1; }
 [ -s "$DTB_BASE/sm8150.dtb" ] || { echo "[ERROR] Compiled sm8150.dtb missing." >&2; exit 1; }
 [ -s "$DTB_BASE/sm8150-v2.dtb" ] || { echo "[ERROR] Compiled sm8150-v2.dtb missing." >&2; exit 1; }
-KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" kernelrelease)"
+KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= kernelrelease)"
 EXPECTED_RELEASE="$(awk '$1 == "VERSION" && $2 == "=" { v=$3 } $1 == "PATCHLEVEL" && $2 == "=" { p=$3 } $1 == "SUBLEVEL" && $2 == "=" { s=$3 } $1 == "EXTRAVERSION" && $2 == "=" { e=$3 } END { printf "%s.%s.%s%s", v, p, s, e }' "$ROOT/Makefile")"
 [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || { echo "[ERROR] Kernel release $KERNELRELEASE does not match base release $EXPECTED_RELEASE; refuse a module-incompatible suffix." >&2; exit 1; }
 SAFE_RELEASE="$(printf '%s' "$KERNELRELEASE" | sed 's/[^A-Za-z0-9._+-]/_/g')"
