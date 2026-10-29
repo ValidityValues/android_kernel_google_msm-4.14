@@ -3,8 +3,27 @@
 # Options: KERNEL_NAME, JOBS.
 set -Ee pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
-# Remove any untracked KernelSU-Next leftovers from older builds before making the baseline.
+# Remove any untracked KernelSU-Next leftovers and old Kconfig/Makefile wiring before baseline builds.
 rm -rf "$ROOT/KernelSU-Next" "$ROOT/drivers/kernelsu" "$ROOT"/KernelSU-Next.incomplete.*
+python3 - "$ROOT" <<'PY_CLEAN_KSU'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+exact_lines = {
+    "drivers/Makefile": {"obj-$(CONFIG_KSU) += kernelsu/"},
+    "drivers/Kconfig": {'source "drivers/kernelsu/Kconfig"'},
+}
+for rel, stale_lines in exact_lines.items():
+    path = root / rel
+    if not path.is_file():
+        raise SystemExit("Cannot validate clean baseline: missing " + rel)
+    original = path.read_text()
+    kept = [line for line in original.splitlines() if line.strip() not in stale_lines]
+    cleaned = "\n".join(kept) + ("\n" if original.endswith("\n") else "")
+    if cleaned != original:
+        path.write_text(cleaned)
+PY_CLEAN_KSU
 OUT_DIR="$ROOT/out"
 TOOLCHAIN_DIR="$ROOT/.toolchains"
 DIST_DIR="$ROOT/dist"
@@ -88,6 +107,14 @@ if [ -e "$ROOT/KernelSU-Next" ] || [ -e "$ROOT/drivers/kernelsu" ]; then
   echo '[ERROR] KernelSU-Next files remain in the clean baseline source tree.' >&2
   exit 1
 fi
+if grep -Eq 'CONFIG_KSU|kernelsu' "$ROOT/drivers/Makefile" "$ROOT/drivers/Kconfig"; then
+  echo '[ERROR] KernelSU Kconfig/Makefile wiring remains in the clean baseline source tree.' >&2
+  exit 1
+fi
+if grep -q '^CONFIG_KSU' "$OUT_DIR/.config"; then
+  echo '[ERROR] KernelSU options remain in the clean baseline .config.' >&2
+  exit 1
+fi
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
 log "Compiling stock floral artifacts (Image.lz4, dtbo.img, all DTBs) with $JOBS jobs; no integration patches."
@@ -120,7 +147,8 @@ AK3_ACTUAL_COMMIT="$(git -C "$AK3_SOURCE" rev-parse HEAD)"
 [ "$AK3_ACTUAL_COMMIT" = "$AK3_COMMIT" ] || { echo "[ERROR] AnyKernel3 revision mismatch: $AK3_ACTUAL_COMMIT" >&2; exit 1; }
 [ -s "$AK3_SOURCE/tools/ak3-core.sh" ] && [ -s "$AK3_SOURCE/anykernel.sh" ]
 STAGE_DIR="$(mktemp -d "$OUT_DIR/anykernel3-stage.XXXXXX")"
-cp -a "$AK3_SOURCE/." "$STAGE_DIR/"; rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/.github" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch" "$STAGE_DIR/modules"
+cp -a "$AK3_SOURCE/." "$STAGE_DIR/"
+rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/.github" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch" "$STAGE_DIR/modules" "$STAGE_DIR/vendor_dlkm" "$STAGE_DIR/vendor_dlkm.img" "$STAGE_DIR/system_dlkm" "$STAGE_DIR/system_dlkm.img"
 for f in zImage zImage-dtb Image Image-dtb Image.gz Image.gz-dtb Image.bz2 Image.bz2-dtb Image.lzo Image.lzo-dtb Image.lzma Image.lzma-dtb Image.xz Image.xz-dtb Image.lz4 Image.lz4-dtb Image.fit dtb kernel_dtb dtbo.img; do rm -f "$STAGE_DIR/$f"; done
 # Kernel-only update: do not package a different ROM's DTB/DTBO. AnyKernel3 will preserve
 # the boot image's current ramdisk and embedded DTB and leave the dtbo partition untouched.
@@ -145,11 +173,11 @@ IS_SLOT_DEVICE=1;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
 . tools/ak3-core.sh;
-# Sourcing tools/ak3-core.sh has already called setup_ak and resolved BLOCK=boot
-# to the active slot. split_boot/flash_boot update only the kernel and preserve the
-# existing ramdisk, boot-image DTB, and original boot image metadata.
-split_boot;
-flash_boot;
+# Use the standard AnyKernel3 flow: preserve the source boot image's DTB and
+# kernel command line, repack its ramdisk using detected compression, replace the
+# kernel payload only, and do not flash DTBO/vendor_dlkm/system_dlkm images.
+dump_boot;
+write_boot;
 AK3
 sed -i "s|__KERNEL_NAME__|$KERNEL_NAME|" "$STAGE_DIR/anykernel.sh"
 for required in Image.lz4 version anykernel.sh tools/ak3-core.sh; do
