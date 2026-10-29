@@ -90,17 +90,22 @@ log "Compiler: $($CLANG_BIN/clang --version | head -n 1)"
 
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= "$DEFCONFIG"
-# Keep stock floral LTO/CFI and device settings. Only stabilize UTS_RELEASE:
-# auto Git suffixes from our fork's workflow-only commits can break module vermagic.
-run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= olddefconfig
-for sym in LTO_CLANG CFI_CLANG BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
-  grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] Stock floral profile lost CONFIG_$sym=y." >&2; exit 1; }
+# Match LineageOS's build.config.floral_no-cfi profile: it checks floral_defconfig,
+# then disables clang LTO/CFI options before olddefconfig. Keep device/DTB settings intact.
+for sym in BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
+  grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] floral_defconfig lost CONFIG_$sym=y before no-CFI overrides." >&2; exit 1; }
 done
-if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then
-  echo '[ERROR] CONFIG_THINLTO=y differs from floral_defconfig; refusing a non-baseline build.' >&2
-  exit 1
-fi
+run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LTO --disable LTO_CLANG --disable CFI --disable CFI_PERMISSIVE --disable CFI_CLANG --disable THINLTO --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= olddefconfig
+for sym in LTO LTO_CLANG CFI CFI_PERMISSIVE CFI_CLANG THINLTO; do
+  if grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config"; then
+    echo "[ERROR] CONFIG_$sym=y remains enabled in the official floral_no-cfi profile." >&2
+    exit 1
+  fi
+done
+for sym in BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
+  grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] floral_no-cfi profile lost CONFIG_$sym=y." >&2; exit 1; }
+done
 grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config" || { echo '[ERROR] LOCALVERSION_AUTO must be disabled.' >&2; exit 1; }
 grep -q '^CONFIG_LOCALVERSION=""$' "$OUT_DIR/.config" || { echo '[ERROR] CONFIG_LOCALVERSION must be empty for the baseline.' >&2; exit 1; }
 if [ -e "$ROOT/KernelSU-Next" ] || [ -e "$ROOT/drivers/kernelsu" ]; then
