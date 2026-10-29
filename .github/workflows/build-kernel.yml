@@ -66,6 +66,11 @@ jobs:
           grep -Fq 'EXPECTED_RELEASE' compile.sh
           grep -Fq 'sm8150-v2.dtb' compile.sh
           grep -Fq 'Image.lz4 dtbs' compile.sh
+          grep -Fq 'IMAGE_MAGIC' compile.sh
+          grep -Fq '41524d64' compile.sh
+          grep -Fq 'lz4c -d -c "$IMAGE" | cmp -s - "$RAW_IMAGE"' compile.sh
+          grep -Fq 'DTB_MAGIC' compile.sh
+          grep -Fq 'd00dfeed' compile.sh
           ! grep -Fq 'arch/arm64/boot/dts/google/qcom-base/sm8150.dtb arch/arm64/boot/dts' compile.sh
           grep -Fq 'KERNELRELEASE" = "$EXPECTED_RELEASE"' compile.sh
           if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
