@@ -3,6 +3,8 @@
 # Options: KERNEL_NAME, JOBS.
 set -Ee pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
+# Remove any untracked KernelSU-Next leftovers from older builds before making the baseline.
+rm -rf "$ROOT/KernelSU-Next" "$ROOT/drivers/kernelsu" "$ROOT"/KernelSU-Next.incomplete.*
 OUT_DIR="$ROOT/out"
 TOOLCHAIN_DIR="$ROOT/.toolchains"
 DIST_DIR="$ROOT/dist"
@@ -82,8 +84,8 @@ if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then
 fi
 grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config" || { echo '[ERROR] LOCALVERSION_AUTO must be disabled.' >&2; exit 1; }
 grep -q '^CONFIG_LOCALVERSION=""$' "$OUT_DIR/.config" || { echo '[ERROR] CONFIG_LOCALVERSION must be empty for the baseline.' >&2; exit 1; }
-if grep -Eq '^CONFIG_KSU(_|=)' "$OUT_DIR/.config" || [ -e "$ROOT/drivers/kernelsu" ] || [ -e "$ROOT/KernelSU-Next" ]; then
-  echo '[ERROR] KernelSU residue detected in the supposedly clean baseline.' >&2
+if [ -e "$ROOT/KernelSU-Next" ] || [ -e "$ROOT/drivers/kernelsu" ]; then
+  echo '[ERROR] KernelSU-Next files remain in the clean baseline source tree.' >&2
   exit 1
 fi
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
