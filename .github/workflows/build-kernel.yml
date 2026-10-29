@@ -50,18 +50,21 @@ jobs:
       - name: Validate clean baseline scripts
         run: |
           bash -n compile.sh
-          grep -q 'DEFCONFIG=floral_defconfig' compile.sh
-          grep -q '^# CONFIG_THINLTO is not set
-          grep -q 'BLOCK=boot;' compile.sh
-          grep -q 'IS_SLOT_DEVICE=1;' compile.sh
-          grep -q 'split_boot;' compile.sh
-          grep -q 'flash_boot;' compile.sh
-          grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
-          grep -q 'LOCALVERSION=' compile.sh
-          grep -q 'EXPECTED_RELEASE' compile.sh
-          grep -q 'sm8150-v2.dtb' compile.sh
+          grep -Fq 'DEFCONFIG=floral_defconfig' compile.sh
+          grep -Fq '# CONFIG_THINLTO is not set' arch/arm64/configs/floral_defconfig
+          grep -Fq 'CONFIG_LTO_CLANG=y' arch/arm64/configs/floral_defconfig
+          grep -Fq 'CONFIG_CFI_CLANG=y' arch/arm64/configs/floral_defconfig
+          grep -Fq '. tools/ak3-core.sh;' compile.sh
+          grep -Fq 'BLOCK=boot;' compile.sh
+          grep -Fq 'IS_SLOT_DEVICE=1;' compile.sh
+          grep -Fq 'split_boot;' compile.sh
+          grep -Fq 'flash_boot;' compile.sh
+          grep -Fq 'CONFIG_LOCALVERSION_AUTO' compile.sh
+          grep -Fq 'LOCALVERSION=' compile.sh
+          grep -Fq 'EXPECTED_RELEASE' compile.sh
+          grep -Fq 'sm8150-v2.dtb' compile.sh
           if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
-            echo 'KernelSU integration residue found in clean baseline checkout.' >&2
+            echo 'KernelSU residue found in clean baseline checkout.' >&2
             exit 1
           fi
           if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KernelSU-Next|drivers/kernelsu' compile.sh; then
