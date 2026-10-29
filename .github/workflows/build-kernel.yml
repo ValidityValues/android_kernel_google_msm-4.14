@@ -57,9 +57,15 @@ jobs:
           grep -q 'split_boot;' compile.sh
           grep -q 'flash_boot;' compile.sh
           grep -q 'CONFIG_LOCALVERSION_AUTO' compile.sh
+          grep -q 'LOCALVERSION=' compile.sh
+          grep -q 'EXPECTED_RELEASE' compile.sh
           grep -q 'sm8150-v2.dtb' compile.sh
-          if grep -Eq 'KSU_NEXT|KSU_HOOK_MODE|KSU_TAG|KSU_REPO_URL|PY_MANUAL|KernelSU-Next.git' compile.sh .github/workflows/build-kernel.yml; then
-            echo 'KernelSU integration residue found in clean baseline workflow.' >&2
+          if [ -e KernelSU-Next ] || [ -e drivers/kernelsu ]; then
+            echo 'KernelSU integration residue found in clean baseline checkout.' >&2
+            exit 1
+          fi
+          if grep -Eq 'KSU_NEXT|KSU_HOOK_MODE|KSU_TAG|KSU_REPO_URL|PY_MANUAL|KernelSU-Next\.git|LTO_MODE|--enable THINLTO' compile.sh; then
+            echo 'KernelSU or custom LTO integration residue found in compile.sh.' >&2
             exit 1
           fi
 
