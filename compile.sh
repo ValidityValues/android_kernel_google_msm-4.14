@@ -68,7 +68,7 @@ run_logged() {
 on_error() { rc=$?; echo "[ERROR] Build stopped (exit $rc); out/ and toolchain cache were not cleaned." >&2; echo "[INFO] Log: $LOG" >&2; [ ! -f "$LOG" ] || tail -n 40 "$LOG" >&2; exit "$rc"; }
 trap on_error ERR
 
-for cmd in git curl tar make gcc zip bc bison flex perl python3 lz4 sed; do
+for cmd in git curl tar make gcc zip bc bison flex perl python3 lz4 lz4c sed od cmp; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "[ERROR] Missing build dependency: $cmd" >&2; exit 2; }
 done
 # Download the pinned Android Clang release and retain partial downloads for retries.
@@ -127,10 +127,24 @@ log "Compiling stock floral artifacts (Image.lz4 and all DTBs) with $JOBS jobs; 
 # call the dtbo.img packaging target, which requires Google's separate mkdtimg prebuilts.
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= -j"$JOBS" Image.lz4 dtbs
 IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
+RAW_IMAGE="$OUT_DIR/arch/arm64/boot/Image"
 DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
 [ -s "$IMAGE" ] || { echo "[ERROR] Compiled image not found: $IMAGE" >&2; exit 1; }
+[ -s "$RAW_IMAGE" ] || { echo "[ERROR] Uncompressed Image is missing: $RAW_IMAGE" >&2; exit 1; }
+# ARM64 Image header magic ("ARM\\x64") lives at byte offset 0x38.
+IMAGE_MAGIC="$(od -An -tx1 -j56 -N4 "$RAW_IMAGE" | tr -d '[:space:]')"
+[ "$IMAGE_MAGIC" = "414d5244" ] || { echo "[ERROR] Raw Image has an unexpected ARM64 header magic: $IMAGE_MAGIC" >&2; exit 1; }
+log "Validating Image.lz4 decodes byte-for-byte to the raw ARM64 Image."
+if ! lz4c -d -c "$IMAGE" | cmp -s - "$RAW_IMAGE"; then
+  echo '[ERROR] Image.lz4 fails decompression or differs from the raw ARM64 Image.' >&2
+  exit 1
+fi
 [ -s "$DTB_BASE/sm8150.dtb" ] || { echo "[ERROR] Compiled sm8150.dtb missing." >&2; exit 1; }
 [ -s "$DTB_BASE/sm8150-v2.dtb" ] || { echo "[ERROR] Compiled sm8150-v2.dtb missing." >&2; exit 1; }
+for dtb in "$DTB_BASE/sm8150.dtb" "$DTB_BASE/sm8150-v2.dtb"; do
+  DTB_MAGIC="$(od -An -tx1 -N4 "$dtb" | tr -d '[:space:]')"
+  [ "$DTB_MAGIC" = "d00dfeed" ] || { echo "[ERROR] Invalid flattened device-tree header in $dtb: $DTB_MAGIC" >&2; exit 1; }
+done
 KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= kernelrelease)"
 EXPECTED_RELEASE="$(awk '$1 == "VERSION" && $2 == "=" { v=$3 } $1 == "PATCHLEVEL" && $2 == "=" { p=$3 } $1 == "SUBLEVEL" && $2 == "=" { s=$3 } $1 == "EXTRAVERSION" && $2 == "=" { e=$3 } END { printf "%s.%s.%s%s", v, p, s, e }' "$ROOT/Makefile")"
 [ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || { echo "[ERROR] Kernel release $KERNELRELEASE does not match base release $EXPECTED_RELEASE; refuse a module-incompatible suffix." >&2; exit 1; }
