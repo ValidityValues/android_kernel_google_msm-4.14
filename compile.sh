@@ -120,6 +120,7 @@ if [ ! -d "$AK3_SOURCE/.git" ]; then
 fi
 run_logged git -C "$AK3_SOURCE" fetch --depth=1 origin "$AK3_COMMIT"
 run_logged git -C "$AK3_SOURCE" checkout --detach FETCH_HEAD
+run_logged git -C "$AK3_SOURCE" clean -fdx
 AK3_ACTUAL_COMMIT="$(git -C "$AK3_SOURCE" rev-parse HEAD)"
 [ "$AK3_ACTUAL_COMMIT" = "$AK3_COMMIT" ] || { echo "[ERROR] AnyKernel3 revision mismatch: $AK3_ACTUAL_COMMIT" >&2; exit 1; }
 [ -s "$AK3_SOURCE/tools/ak3-core.sh" ] && [ -s "$AK3_SOURCE/anykernel.sh" ]
@@ -154,6 +155,13 @@ split_boot;
 flash_boot;
 AK3
 sed -i "s|__KERNEL_NAME__|$KERNEL_NAME|" "$STAGE_DIR/anykernel.sh"
+for required in Image.lz4 version anykernel.sh tools/ak3-core.sh; do
+  [ -s "$STAGE_DIR/$required" ] || { echo "[ERROR] AnyKernel3 package is missing $required." >&2; exit 1; }
+done
+grep -Fq 'BLOCK=boot;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'IS_SLOT_DEVICE=1;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'split_boot;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'flash_boot;' "$STAGE_DIR/anykernel.sh"
 ZIP_TMP="$ZIP_OUT.tmp.$$"; rm -f "$ZIP_TMP"
 log "Packaging $IMAGE into $ZIP_OUT"
 (cd "$STAGE_DIR" && zip -qr9 "$ZIP_TMP" .)
