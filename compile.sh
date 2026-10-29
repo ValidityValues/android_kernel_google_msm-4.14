@@ -69,8 +69,9 @@ log "Compiler: $($CLANG_BIN/clang --version | head -n 1)"
 
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" "$DEFCONFIG"
-# Keep the checked-in floral_defconfig intact for a meaningful no-KernelSU control build.
-# Do not override LTO/CFI, LOCALVERSION, or LOCALVERSION_AUTO.
+# Keep stock floral LTO/CFI and device settings. Only stabilize UTS_RELEASE:
+# auto Git suffixes from our fork's workflow-only commits can break module vermagic.
+run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
 run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
 for sym in LTO_CLANG CFI_CLANG BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
   grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] Stock floral profile lost CONFIG_$sym=y." >&2; exit 1; }
@@ -79,6 +80,8 @@ if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then
   echo '[ERROR] CONFIG_THINLTO=y differs from floral_defconfig; refusing a non-baseline build.' >&2
   exit 1
 fi
+grep -q '^# CONFIG_LOCALVERSION_AUTO is not set$' "$OUT_DIR/.config" || { echo '[ERROR] LOCALVERSION_AUTO must be disabled.' >&2; exit 1; }
+grep -q '^CONFIG_LOCALVERSION=""$' "$OUT_DIR/.config" || { echo '[ERROR] CONFIG_LOCALVERSION must be empty for the baseline.' >&2; exit 1; }
 if grep -Eq '^CONFIG_KSU(_|=)' "$OUT_DIR/.config" || [ -e "$ROOT/drivers/kernelsu" ] || [ -e "$ROOT/KernelSU-Next" ]; then
   echo '[ERROR] KernelSU residue detected in the supposedly clean baseline.' >&2
   exit 1
@@ -95,6 +98,8 @@ DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
 [ -s "$DTB_BASE/sm8150.dtb" ] || { echo "[ERROR] Compiled sm8150.dtb missing." >&2; exit 1; }
 [ -s "$DTB_BASE/sm8150-v2.dtb" ] || { echo "[ERROR] Compiled sm8150-v2.dtb missing." >&2; exit 1; }
 KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" kernelrelease)"
+EXPECTED_RELEASE="$(awk '$1 == "VERSION" && $2 == "=" { v=$3 } $1 == "PATCHLEVEL" && $2 == "=" { p=$3 } $1 == "SUBLEVEL" && $2 == "=" { s=$3 } $1 == "EXTRAVERSION" && $2 == "=" { e=$3 } END { printf "%s.%s.%s%s", v, p, s, e }' "$ROOT/Makefile")"
+[ "$KERNELRELEASE" = "$EXPECTED_RELEASE" ] || { echo "[ERROR] Kernel release $KERNELRELEASE does not match base release $EXPECTED_RELEASE; refuse a module-incompatible suffix." >&2; exit 1; }
 SAFE_RELEASE="$(printf '%s' "$KERNELRELEASE" | sed 's/[^A-Za-z0-9._+-]/_/g')"
 ZIP_OUT="$DIST_DIR/AnyKernel3-$SAFE_KERNEL_NAME-flame-$SAFE_RELEASE.zip"
 # Use a reviewed AnyKernel3 revision rather than cloning a moving master on every build.
@@ -111,7 +116,7 @@ AK3_ACTUAL_COMMIT="$(git -C "$AK3_SOURCE" rev-parse HEAD)"
 [ "$AK3_ACTUAL_COMMIT" = "$AK3_COMMIT" ] || { echo "[ERROR] AnyKernel3 revision mismatch: $AK3_ACTUAL_COMMIT" >&2; exit 1; }
 [ -s "$AK3_SOURCE/tools/ak3-core.sh" ] && [ -s "$AK3_SOURCE/anykernel.sh" ]
 STAGE_DIR="$(mktemp -d "$OUT_DIR/anykernel3-stage.XXXXXX")"
-cp -a "$AK3_SOURCE/." "$STAGE_DIR/"; rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch"
+cp -a "$AK3_SOURCE/." "$STAGE_DIR/"; rm -rf "$STAGE_DIR/.git" "$STAGE_DIR/.github" "$STAGE_DIR/ramdisk" "$STAGE_DIR/patch" "$STAGE_DIR/modules"
 for f in zImage zImage-dtb Image Image-dtb Image.gz Image.gz-dtb Image.bz2 Image.bz2-dtb Image.lzo Image.lzo-dtb Image.lzma Image.lzma-dtb Image.xz Image.xz-dtb Image.lz4 Image.lz4-dtb Image.fit dtb kernel_dtb dtbo.img; do rm -f "$STAGE_DIR/$f"; done
 # Kernel-only update: do not package a different ROM's DTB/DTBO. AnyKernel3 will preserve
 # the boot image's current ramdisk and embedded DTB and leave the dtbo partition untouched.
