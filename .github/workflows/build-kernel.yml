@@ -57,8 +57,10 @@ jobs:
           grep -Fq '. tools/ak3-core.sh;' compile.sh
           grep -Fq 'BLOCK=boot;' compile.sh
           grep -Fq 'IS_SLOT_DEVICE=1;' compile.sh
-          grep -Fq 'split_boot;' compile.sh
-          grep -Fq 'flash_boot;' compile.sh
+          grep -Fq 'dump_boot;' compile.sh
+          grep -Fq 'write_boot;' compile.sh
+          ! grep -Fq 'split_boot;' compile.sh
+          ! grep -Fq 'flash_boot;' compile.sh
           grep -Fq 'CONFIG_LOCALVERSION_AUTO' compile.sh
           grep -Fq 'LOCALVERSION=' compile.sh
           grep -Fq 'EXPECTED_RELEASE' compile.sh
@@ -70,6 +72,7 @@ jobs:
             echo 'KernelSU residue found in clean baseline checkout.' >&2
             exit 1
           fi
+          ! grep -Eq 'CONFIG_KSU|kernelsu' drivers/Makefile drivers/Kconfig
           if grep -Eq 'LTO_MODE|--enable THINLTO|KSU_HOOK_MODE|KSU_NEXT|PY_MANUAL|ksu_handle_' compile.sh; then
             echo 'Integration or non-stock build override found in compile.sh.' >&2
             exit 1
