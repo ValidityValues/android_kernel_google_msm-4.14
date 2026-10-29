@@ -93,5 +93,8 @@ jobs:
             out/arch/arm64/boot/dtbo.img
             out/arch/arm64/boot/dts/google/qcom-base/sm8150.dtb
             out/arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
+            out/include/config/kernel.release
+            out/include/generated/utsrelease.h
+          include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
