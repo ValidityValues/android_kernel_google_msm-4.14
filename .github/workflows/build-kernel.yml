@@ -64,8 +64,8 @@ jobs:
             echo 'KernelSU integration residue found in clean baseline checkout.' >&2
             exit 1
           fi
-          if grep -Eq 'KSU_NEXT|KSU_HOOK_MODE|KSU_TAG|KSU_REPO_URL|PY_MANUAL|KernelSU-Next\.git|LTO_MODE|--enable THINLTO' compile.sh; then
-            echo 'KernelSU or custom LTO integration residue found in compile.sh.' >&2
+          if grep -Eq 'LTO_MODE|--enable THINLTO|LOCALVERSION="\$LOCALVERSION"|KernelSU-Next|drivers/kernelsu' compile.sh; then
+            echo 'Integration or non-stock build override found in compile.sh.' >&2
             exit 1
           fi
 
