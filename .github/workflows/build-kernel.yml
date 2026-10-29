@@ -9,11 +9,6 @@ on:
         required: true
         type: string
         default: 'Validity Pixel 4 Kernel'
-      kernelsu_next:
-        description: 'Integrate KernelSU-Next with manual hooks only'
-        required: true
-        type: boolean
-        default: true
       lto_mode:
         description: 'ThinLTO recommended. Full LTO uses more memory; none disables LTO and CFI.'
         required: true
@@ -61,30 +56,18 @@ jobs:
           path: .toolchains/clang-r416183b
           key: android-clang-r416183b-${{ runner.os }}
 
-      - name: Validate manual-hook prerequisites
-        if: ${{ inputs.kernelsu_next }}
+      - name: Validate clean baseline scripts
         run: |
           bash -n compile.sh
-          patcher="$(mktemp)"
-          sed -n "/^  python3 - .*<<'PY_MANUAL'$/,/^PY_MANUAL$/p" compile.sh | sed '1d;$d' > "$patcher"
-          test -s "$patcher"
-          python3 -c 'import ast,sys; ast.parse(open(sys.argv[1], encoding="utf-8").read())' "$patcher"
-          rm -f "$patcher"
-          grep -q 'int do_execve(' fs/exec.c
-          grep -q 'int do_execveat(' fs/exec.c
-          grep -q 'static int compat_do_execve(' fs/exec.c
-          grep -q 'static int compat_do_execveat(' fs/exec.c
-          grep -q 'SYSCALL_DEFINE3(faccessat' fs/open.c
-          grep -q 'ssize_t vfs_read(' fs/read_write.c
-          grep -q 'SYSCALL_DEFINE4(newfstatat' fs/stat.c
-          grep -q 'COMPAT_SYSCALL_DEFINE4(newfstatat' fs/stat.c
-          echo 'Manual-hook source anchors found; compile.sh will apply and verify the current KernelSU-Next API hooks.'
+          grep -q 'DEFCONFIG=floral_defconfig' compile.sh
+          grep -q 'BLOCK=boot;' compile.sh
+          grep -q 'IS_SLOT_DEVICE=1;' compile.sh
+          grep -q 'split_boot;' compile.sh
+          grep -q 'flash_boot;' compile.sh
 
       - name: Build and package AnyKernel3 ZIP
         env:
           KERNEL_NAME: ${{ inputs.kernel_name }}
-          KSU_NEXT: ${{ inputs.kernelsu_next }}
-          KSU_HOOK_MODE: manual
           LTO_MODE: ${{ inputs.lto_mode }}
           JOBS: '3'
         run: |
