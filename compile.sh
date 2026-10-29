@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Pixel 4 (floral) Android 4.14 kernel build + AnyKernel3 package.
-# Options: KERNEL_NAME, LTO_MODE=thin|full|none, JOBS.
+# Options: KERNEL_NAME, JOBS.
 set -Ee pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd -P)"
 OUT_DIR="$ROOT/out"
@@ -22,18 +22,10 @@ AK3_SOURCE="$TOOLCHAIN_DIR/AnyKernel3"
 AK3_COMMIT=41f04bdb4ee30a44e429c2c1131d5e8bb32b15f1
 
 if [ -z "$KERNEL_NAME" ]; then KERNEL_NAME='Validity Pixel 4 Kernel'; fi
-if [ -z "$LTO_MODE" ]; then LTO_MODE=thin; fi
-LTO_MODE="$(printf '%s' "$LTO_MODE" | tr '[:upper:]' '[:lower:]')"
-case "$LTO_MODE" in
-  thin|full|none) ;;
-  *) echo '[ERROR] LTO_MODE must be thin, full, or none.' >&2; exit 2 ;;
-esac
 if ! printf '%s\n' "$KERNEL_NAME" | LC_ALL=C grep -Eq '^[A-Za-z0-9][A-Za-z0-9._ +()-]{0,79}$'; then
   echo '[ERROR] KERNEL_NAME must be 1-80 chars: letters, digits, spaces, . _ + ( ) -' >&2; exit 2
 fi
 SAFE_KERNEL_NAME="$(printf '%s' "$KERNEL_NAME" | sed -E 's/[[:space:]]+/-/g; s/[^A-Za-z0-9._+-]/_/g')"
-KERNEL_VERSION_TAG="$(printf '%s' "$SAFE_KERNEL_NAME" | cut -c1-20)"
-LOCALVERSION="-$KERNEL_VERSION_TAG"
 log() { printf '[%s] %s\n' "$(date '+%F %T')" "$*" | tee -a "$LOG"; }
 run_logged() {
   log "+ $*"
@@ -76,39 +68,33 @@ export PATH="$CLANG_BIN:$PATH"
 log "Compiler: $($CLANG_BIN/clang --version | head -n 1)"
 
 log "Configuring $DEFCONFIG (kernel name: $KERNEL_NAME)"
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" "$DEFCONFIG"
-# Prefer ThinLTO by default: it retains LTO/CFI while reducing the high
-# memory/time cost of full LTO during vmlinux.o linking.
-case "$LTO_MODE" in
-  thin)
-    log '[INFO] LTO mode: ThinLTO (CFI remains enabled).'
-    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable LTO_CLANG --enable THINLTO --enable CFI_CLANG ;;
-  full)
-    log '[WARNING] LTO mode: full LTO (high memory usage).'
-    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --enable LTO_CLANG --disable THINLTO --enable CFI_CLANG ;;
-  none)
-    log '[WARNING] LTO mode: disabled (CFI/LTO protection will be disabled).'
-    run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable CFI_CLANG --disable THINLTO --disable LTO_CLANG ;;
-esac
-
-run_logged "$ROOT/scripts/config" --file "$OUT_DIR/.config" --disable LOCALVERSION_AUTO --set-str LOCALVERSION ''
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" olddefconfig
-case "$LTO_MODE" in
-  thin)
-    for sym in LTO_CLANG THINLTO CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for ThinLTO." >&2; exit 1; }; done ;;
-  full)
-    for sym in LTO_CLANG CFI_CLANG; do grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] CONFIG_$sym=y did not survive olddefconfig for full LTO." >&2; exit 1; }; done
-    if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then echo '[ERROR] THINLTO unexpectedly enabled in full mode.' >&2; exit 1; fi ;;
-  none)
-    if grep -qE '^CONFIG_(LTO_CLANG|CFI_CLANG)=y$' "$OUT_DIR/.config"; then echo '[ERROR] LTO/CFI remained enabled after selecting LTO_MODE=none.' >&2; exit 1; fi ;;
-esac
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" "$DEFCONFIG"
+# Keep the checked-in floral_defconfig intact for a meaningful no-KernelSU control build.
+# Do not override LTO/CFI, LOCALVERSION, or LOCALVERSION_AUTO.
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
+for sym in LTO_CLANG CFI_CLANG BUILD_ARM64_APPENDED_DTB_IMAGE BUILD_ARM64_DT_OVERLAY; do
+  grep -q "^CONFIG_$sym=y$" "$OUT_DIR/.config" || { echo "[ERROR] Stock floral profile lost CONFIG_$sym=y." >&2; exit 1; }
+done
+if grep -q '^CONFIG_THINLTO=y$' "$OUT_DIR/.config"; then
+  echo '[ERROR] CONFIG_THINLTO=y differs from floral_defconfig; refusing a non-baseline build.' >&2
+  exit 1
+fi
+if grep -Eq '^CONFIG_KSU(_|=)' "$OUT_DIR/.config" || [ -e "$ROOT/drivers/kernelsu" ] || [ -e "$ROOT/KernelSU-Next" ]; then
+  echo '[ERROR] KernelSU residue detected in the supposedly clean baseline.' >&2
+  exit 1
+fi
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
-log "Compiling clean Image.lz4 baseline with $JOBS jobs (no integration patches)."
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" -j"$JOBS" Image.lz4
+log "Compiling stock floral artifacts (Image.lz4, dtbo.img, sm8150*.dtb) with $JOBS jobs; no integration patches."
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" -j"$JOBS" Image.lz4 dtbo.img arch/arm64/boot/dts/google/qcom-base/sm8150.dtb arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
 IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
+DTBO="$OUT_DIR/arch/arm64/boot/dtbo.img"
+DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
 [ -s "$IMAGE" ] || { echo "[ERROR] Compiled image not found: $IMAGE" >&2; exit 1; }
-KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH="$ARCH" LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION="$LOCALVERSION" kernelrelease)"
+[ -s "$DTBO" ] || { echo "[ERROR] Compiled DTBO missing: $DTBO" >&2; exit 1; }
+[ -s "$DTB_BASE/sm8150.dtb" ] || { echo "[ERROR] Compiled sm8150.dtb missing." >&2; exit 1; }
+[ -s "$DTB_BASE/sm8150-v2.dtb" ] || { echo "[ERROR] Compiled sm8150-v2.dtb missing." >&2; exit 1; }
+KERNELRELEASE="$(make -s -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" kernelrelease)"
 SAFE_RELEASE="$(printf '%s' "$KERNELRELEASE" | sed 's/[^A-Za-z0-9._+-]/_/g')"
 ZIP_OUT="$DIST_DIR/AnyKernel3-$SAFE_KERNEL_NAME-flame-$SAFE_RELEASE.zip"
 # Use a reviewed AnyKernel3 revision rather than cloning a moving master on every build.
@@ -150,7 +136,9 @@ IS_SLOT_DEVICE=1;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
 . tools/ak3-core.sh;
-# Kernel-only replacement: avoid unpacking/repacking an untouched ramdisk.
+# Resolve the boot alias and active slot before split_boot checks the block path.
+# reset_ak calls setup_ak; split_boot/flash_boot preserve the original ramdisk and DTB.
+reset_ak;
 split_boot;
 flash_boot;
 AK3
@@ -160,8 +148,10 @@ for required in Image.lz4 version anykernel.sh tools/ak3-core.sh; do
 done
 grep -Fq 'BLOCK=boot;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'IS_SLOT_DEVICE=1;' "$STAGE_DIR/anykernel.sh"
+grep -Fq 'reset_ak;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'split_boot;' "$STAGE_DIR/anykernel.sh"
 grep -Fq 'flash_boot;' "$STAGE_DIR/anykernel.sh"
+bash -n "$STAGE_DIR/anykernel.sh"
 ZIP_TMP="$ZIP_OUT.tmp.$$"; rm -f "$ZIP_TMP"
 log "Packaging $IMAGE into $ZIP_OUT"
 (cd "$STAGE_DIR" && zip -qr9 "$ZIP_TMP" .)
