@@ -54,6 +54,8 @@ jobs:
           grep -Fq '# CONFIG_THINLTO is not set' arch/arm64/configs/floral_defconfig
           grep -Fq 'CONFIG_LTO_CLANG=y' arch/arm64/configs/floral_defconfig
           grep -Fq 'CONFIG_CFI_CLANG=y' arch/arm64/configs/floral_defconfig
+          grep -Fq 'CONFIG_MODULES=y' arch/arm64/configs/floral_defconfig
+          grep -Fq 'CONFIG_MODVERSIONS=y' arch/arm64/configs/floral_defconfig
           grep -Fq 'build.config.floral_no-cfi profile' compile.sh
           grep -Fq -- '--disable LTO --disable LTO_CLANG --disable CFI --disable CFI_PERMISSIVE --disable CFI_CLANG --disable THINLTO' compile.sh
           grep -Fq '. tools/ak3-core.sh;' compile.sh
