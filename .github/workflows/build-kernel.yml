@@ -51,7 +51,7 @@ jobs:
         run: |
           bash -n compile.sh
           grep -q 'DEFCONFIG=floral_defconfig' compile.sh
-          grep -q 'reset_ak;' compile.sh
+          grep -Fq '. tools/ak3-core.sh;' compile.sh
           grep -q 'BLOCK=boot;' compile.sh
           grep -q 'IS_SLOT_DEVICE=1;' compile.sh
           grep -q 'split_boot;' compile.sh
