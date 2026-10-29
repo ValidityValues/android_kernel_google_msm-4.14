@@ -133,7 +133,7 @@ DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
 [ -s "$RAW_IMAGE" ] || { echo "[ERROR] Uncompressed Image is missing: $RAW_IMAGE" >&2; exit 1; }
 # ARM64 Image header magic ("ARM\\x64") lives at byte offset 0x38.
 IMAGE_MAGIC="$(od -An -tx1 -j56 -N4 "$RAW_IMAGE" | tr -d '[:space:]')"
-[ "$IMAGE_MAGIC" = "414d5244" ] || { echo "[ERROR] Raw Image has an unexpected ARM64 header magic: $IMAGE_MAGIC" >&2; exit 1; }
+[ "$IMAGE_MAGIC" = "41524d64" ] || { echo "[ERROR] Raw Image has an unexpected ARM64 header magic: $IMAGE_MAGIC" >&2; exit 1; }
 log "Validating Image.lz4 decodes byte-for-byte to the raw ARM64 Image."
 if ! lz4c -d -c "$IMAGE" | cmp -s - "$RAW_IMAGE"; then
   echo '[ERROR] Image.lz4 fails decompression or differs from the raw ARM64 Image.' >&2
