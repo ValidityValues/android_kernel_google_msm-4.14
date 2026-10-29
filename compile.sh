@@ -90,8 +90,10 @@ if [ -e "$ROOT/KernelSU-Next" ] || [ -e "$ROOT/drivers/kernelsu" ]; then
 fi
 if [ -z "$JOBS" ]; then JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc)"; fi
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo '[ERROR] JOBS must be a positive integer.' >&2; exit 2; }
-log "Compiling stock floral artifacts (Image.lz4, dtbo.img, sm8150*.dtb) with $JOBS jobs; no integration patches."
-run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= -j"$JOBS" Image.lz4 dtbo.img arch/arm64/boot/dts/google/qcom-base/sm8150.dtb arch/arm64/boot/dts/google/qcom-base/sm8150-v2.dtb
+log "Compiling stock floral artifacts (Image.lz4, dtbo.img, all DTBs) with $JOBS jobs; no integration patches."
+# DTB targets are relative to the DTS build directory. Passing their full source-tree
+# paths here makes Kbuild prepend arch/arm64/boot/dts twice and fail before compiling.
+run_logged make -C "$ROOT" O="$OUT_DIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CROSS_COMPILE="$CROSS_COMPILE" LOCALVERSION= -j"$JOBS" Image.lz4 dtbo.img dtbs
 IMAGE="$OUT_DIR/arch/arm64/boot/Image.lz4"
 DTBO="$OUT_DIR/arch/arm64/boot/dtbo.img"
 DTB_BASE="$OUT_DIR/arch/arm64/boot/dts/google/qcom-base"
